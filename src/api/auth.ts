@@ -13,7 +13,7 @@ import type { TeamleaderAuthConfig, TokenResponse } from "../types/index.js";
 
 const TOKEN_URL = "https://focus.teamleader.eu/oauth2/access_token";
 const TOKEN_BUFFER_MS = 60_000; // Refresh 60s before expiry
-const TOKEN_FILE = join(homedir(), ".teamleader-tokens.json");
+const TOKEN_FILE = process.env.TEAMLEADER_TOKEN_FILE || join(homedir(), ".teamleader-tokens.json");
 
 export function loadRefreshToken(fallback: string): string {
   try {

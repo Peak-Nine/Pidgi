@@ -16,7 +16,7 @@ import type { TokenResponse } from "../types/index.js";
 
 const AUTH_URL = "https://focus.teamleader.eu/oauth2/authorize";
 const TOKEN_URL = "https://focus.teamleader.eu/oauth2/access_token";
-const TOKEN_FILE = join(homedir(), ".teamleader-tokens.json");
+const TOKEN_FILE = process.env.TEAMLEADER_TOKEN_FILE || join(homedir(), ".teamleader-tokens.json");
 const CALLBACK_TIMEOUT_MS = 120_000; // 2 minutes
 
 function respond(text: string) {
