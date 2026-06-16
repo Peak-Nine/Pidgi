@@ -36,6 +36,7 @@ import { App } from "@slack/bolt";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { gcalEnabled, gcalToolDefs, handleGcalTool } from "./gcal.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -66,6 +67,10 @@ function writeAllowed(slackUserId: string): boolean {
 const SYSTEM_PROMPT = `You are the Peak Nine planning assistant, answering in Slack.
 You can use Teamleader tools to read and change the team's planning: projects, tasks,
 capacity (userAvailability), reservations (planned time blocks), budgets, deals and more.
+You can also read and write Google Calendars via the gcal_* tools, but only for calendars
+shared with the bot. Google Calendar holds people's REAL meetings and commitments that
+Teamleader planning misses, so use gcal_list_events to judge true availability, and
+gcal_create_event / gcal_update_event to book or move actual meetings.
 
 Formatting for Slack (important):
 - Slack does NOT render Markdown. Use Slack mrkdwn: *single asterisks* for bold (never **double**),
@@ -84,9 +89,10 @@ Showing names, not IDs:
 Accuracy:
 - Never invent numbers, IDs, dates or names. If unsure, say so. If a tool returns nothing,
   say so rather than guessing.
-- Capacity from Teamleader (userAvailability / reservations) reflects Teamleader planning ONLY.
-  It excludes Google Calendar commitments, so "free in Teamleader" can overstate real
-  availability. Mention this when it matters.
+- Capacity from Teamleader (userAvailability / reservations) reflects Teamleader planning ONLY
+  and excludes Google Calendar. When availability actually matters (e.g. before promising
+  someone is free or booking a meeting), cross-check the person's Google Calendar with
+  gcal_list_events rather than trusting Teamleader's "free" alone.
 - Durations from the planning tools are in minutes; convert to hours when you present them.
 - For revenue vs cost: revenue is the project external budget. Cost depends on internal hourly
   rates that are NOT in Teamleader, so do not compute cost unless the user gives you the rates.
@@ -121,12 +127,22 @@ async function main(): Promise<void> {
   }));
   console.log(`Connected to Teamleader MCP. ${anthropicTools.length} tools available.`);
 
+  if (gcalEnabled()) {
+    anthropicTools.push(...(gcalToolDefs as any[]));
+    console.log(`Google Calendar tools enabled (${gcalToolDefs.length}).`);
+  } else {
+    console.log("Google Calendar tools disabled (set GOOGLE_SERVICE_ACCOUNT_JSON to enable).");
+  }
+
   async function callTool(name: string, input: any, slackUserId: string): Promise<{ text: string; isError: boolean }> {
     if (isWriteTool(name) && !writeAllowed(slackUserId)) {
       return {
         isError: true,
         text: `Blocked: "${name}" changes the plan, and you are not on the write allowlist. Ask Niels to add your Slack ID, or use a read-only request.`,
       };
+    }
+    if (name.startsWith("gcal_")) {
+      return handleGcalTool(name, input);
     }
     try {
       const res: any = await mcp.callTool({ name, arguments: input || {} });
