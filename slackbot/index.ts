@@ -32,11 +32,12 @@
 
 import path from "path";
 import dotenv from "dotenv";
-import { App } from "@slack/bolt";
+import { App, ExpressReceiver } from "@slack/bolt";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { gcalEnabled, gcalToolDefs, handleGcalTool } from "./gcal.js";
+import { renderDashboard, dashboardLink } from "./dashboard.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -97,6 +98,11 @@ Multi-project / multi-person planning discipline (do this automatically, unpromp
 - Always finish a multi-project plan with a short "coverage check": list anyone or any role in
   the data/brief that is not yet allocated, and any week where a person is over capacity.
 - If you cannot reconcile something, say so plainly rather than quietly leaving it out.
+- After presenting a multi-project plan, automatically send a follow-up message with: (1) weekly
+  capacity % per person, (2) the role x project matrix, and (3) a milestone list per project with
+  dates. Do not wait to be asked.
+- For any visual view (Gantt, timeline, who-works-on-what, capacity heatmap), Slack cannot draw
+  it: call get_dashboard_link and share the dashboard URL.
 
 Accuracy:
 - Never invent numbers, IDs, dates or names. If unsure, say so. If a tool returns nothing,
@@ -146,12 +152,25 @@ async function main(): Promise<void> {
     console.log("Google Calendar tools disabled (set GOOGLE_SERVICE_ACCOUNT_JSON to enable).");
   }
 
+  if (process.env.DASHBOARD_KEY && process.env.PUBLIC_BASE_URL) {
+    anthropicTools.push({
+      name: "get_dashboard_link",
+      description:
+        "Return the URL of the live visual planning dashboard (team capacity heatmap + open projects). Share this link whenever the user wants a visual, chart, timeline or heatmap that Slack cannot render.",
+      input_schema: { type: "object", properties: {} },
+    } as any);
+    console.log("Dashboard link tool enabled.");
+  }
+
   async function callTool(name: string, input: any, slackUserId: string): Promise<{ text: string; isError: boolean }> {
     if (isWriteTool(name) && !writeAllowed(slackUserId)) {
       return {
         isError: true,
         text: `Blocked: "${name}" changes the plan, and you are not on the write allowlist. Ask Niels to add your Slack ID, or use a read-only request.`,
       };
+    }
+    if (name === "get_dashboard_link") {
+      return { text: dashboardLink(), isError: false };
     }
     if (name.startsWith("gcal_")) {
       return handleGcalTool(name, input);
@@ -252,7 +271,22 @@ async function main(): Promise<void> {
   }
 
   // ── Slack wiring (Events API / HTTP) ──────────────────────────────────────
-  const app = new App({ token: slackBotToken, signingSecret: slackSigningSecret });
+  const receiver = new ExpressReceiver({ signingSecret: slackSigningSecret });
+  const app = new App({ token: slackBotToken, receiver });
+
+  // Read-only live dashboard at /dashboard?key=DASHBOARD_KEY
+  receiver.router.get("/dashboard", async (req: any, res: any) => {
+    const key = process.env.DASHBOARD_KEY;
+    if (!key) { res.status(404).send("Dashboard disabled (set DASHBOARD_KEY)."); return; }
+    if (req.query.key !== key) { res.status(401).send("Unauthorized"); return; }
+    try {
+      const html = await renderDashboard(mcp);
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch (e: any) {
+      res.status(500).send("Dashboard error: " + (e?.message || e));
+    }
+  });
 
   // Dedupe Slack retries (Slack resends an event if it doesn't get a fast 200).
   const seen = new Set<string>();
