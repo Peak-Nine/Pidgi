@@ -139,12 +139,21 @@ async function main(): Promise<void> {
     }
   }
 
-  async function ask(userText: string, slackUserId: string): Promise<string> {
-    const messages: Anthropic.MessageParam[] = [{ role: "user", content: userText }];
+  // Per-thread conversation memory: a clean text-only history per Slack thread,
+  // so follow-ups ("continue", "now do the same for Jonas") keep context.
+  // In-memory only, so it resets if the service restarts (fine for normal use).
+  const threadHistory = new Map<string, Anthropic.MessageParam[]>();
+  const HISTORY_MAX = 20; // keep the last ~10 exchanges per thread
+
+  async function ask(userText: string, slackUserId: string, threadTs: string): Promise<string> {
+    const history = threadHistory.get(threadTs) ?? [];
+    const messages: Anthropic.MessageParam[] = [...history, { role: "user", content: userText }];
+
+    let finalText = "";
     for (let step = 0; step < 10; step++) {
       const resp = await anthropic.messages.create({
         model: MODEL,
-        max_tokens: 1500,
+        max_tokens: 4000,
         system: SYSTEM_PROMPT,
         tools: anthropicTools as any,
         messages,
@@ -168,14 +177,50 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const text = resp.content
+      finalText = resp.content
         .filter((b): b is Anthropic.TextBlock => b.type === "text")
         .map((b) => b.text)
         .join("\n")
         .trim();
-      return text || "(no answer)";
+      break;
     }
-    return "I took too many steps without finishing. Try a more specific question.";
+
+    if (!finalText) finalText = "I took too many steps without finishing. Try a more specific question.";
+
+    // Persist clean text-only history (drop the intra-turn tool calls).
+    const updated: Anthropic.MessageParam[] = [
+      ...history,
+      { role: "user", content: userText },
+      { role: "assistant", content: finalText },
+    ];
+    threadHistory.set(threadTs, updated.slice(-HISTORY_MAX));
+
+    return finalText;
+  }
+
+  // Post a (possibly long) answer as one or more Slack messages in the thread,
+  // splitting on paragraph boundaries to stay under Slack's ~3000-char limit.
+  async function postChunks(say: any, text: string, threadTs: string): Promise<void> {
+    const MAX = 2900;
+    const chunks: string[] = [];
+    let buf = "";
+    for (const para of text.split(/\n{2,}/)) {
+      const candidate = buf ? buf + "\n\n" + para : para;
+      if (candidate.length <= MAX) {
+        buf = candidate;
+      } else {
+        if (buf) { chunks.push(buf); buf = ""; }
+        if (para.length > MAX) {
+          for (let i = 0; i < para.length; i += MAX) chunks.push(para.slice(i, i + MAX));
+        } else {
+          buf = para;
+        }
+      }
+    }
+    if (buf) chunks.push(buf);
+    for (const c of chunks) {
+      await say({ text: c, thread_ts: threadTs });
+    }
   }
 
   // ── Slack wiring (Events API / HTTP) ──────────────────────────────────────
@@ -198,8 +243,8 @@ async function main(): Promise<void> {
       return;
     }
     try {
-      const answer = await ask(cleaned, slackUserId);
-      await say({ text: answer.slice(0, 3800), thread_ts: threadTs });
+      const answer = await ask(cleaned, slackUserId, threadTs);
+      await postChunks(say, answer, threadTs);
     } catch (e: any) {
       await say({ text: `Something went wrong: ${e?.message || e}`, thread_ts: threadTs });
     }
