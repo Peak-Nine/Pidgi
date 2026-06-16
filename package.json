@@ -1,0 +1,63 @@
+{
+  "name": "@tailormade/teamleader-focus-mcp",
+  "version": "3.2.9",
+  "description": "MCP server for Teamleader Focus CRM API — 112 tools covering contacts, companies, deals, tickets, invoices, subscriptions, meetings, projects, time tracking, files, notes, and smart cache-first task resolution.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "teamleader-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "slackbot": "tsx slackbot/index.ts",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
+    "check-coverage": "npx tsx tools/check-coverage.ts",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "mcp",
+    "teamleader",
+    "teamleader-focus",
+    "crm",
+    "model-context-protocol",
+    "ai",
+    "claude",
+    "time-tracking",
+    "projects",
+    "tailormade"
+  ],
+  "author": "Tailormade",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tailormade-eu/Tailormade.TeamleaderFocusMcp.git"
+  },
+  "homepage": "https://github.com/tailormade-eu/Tailormade.TeamleaderFocusMcp#readme",
+  "bugs": {
+    "url": "https://github.com/tailormade-eu/Tailormade.TeamleaderFocusMcp/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.2",
+    "@modelcontextprotocol/sdk": "^1.5.0",
+    "@slack/bolt": "^4.7.3",
+    "dotenv": "^17.4.2",
+    "open": "^11.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

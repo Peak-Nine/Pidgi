@@ -1,0 +1,224 @@
+/**
+ * Peak Nine — Teamleader Slack bot (Events API / webhook mode)
+ * -------------------------------------------------------------
+ * Chat with the Teamleader planning connector from Slack.
+ *
+ * How it works:
+ *   - Runs as an HTTP web service. Slack sends events to POST /slack/events.
+ *     Requests are verified with your Slack Signing Secret (handled by Bolt).
+ *   - Spawns the existing Teamleader MCP server (dist/index.js) as a child
+ *     process and exposes ALL its tools (including the planning tools) to
+ *     Claude. Nothing is duplicated: rebuild the connector and the bot picks
+ *     up the changes on next restart.
+ *   - Runs a Claude (Anthropic API) tool-use loop: user asks -> Claude picks
+ *     Teamleader tools -> bot runs them -> Claude answers in the Slack thread.
+ *
+ * Safety:
+ *   - Read tools are open to everyone in the workspace.
+ *   - Write tools (create/update/delete reservations, etc.) are gated by an
+ *     optional allowlist of Slack user IDs (SLACK_WRITE_ALLOWLIST). Empty
+ *     allowlist = everyone can write (not recommended).
+ *
+ * Required env (see slackbot/.env.example):
+ *   SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, ANTHROPIC_API_KEY,
+ *   TEAMLEADER_CLIENT_ID, TEAMLEADER_CLIENT_SECRET, TEAMLEADER_REFRESH_TOKEN
+ * Optional:
+ *   PORT                     (default: 3000)
+ *   BOT_MODEL                (default: claude-sonnet-4-6)
+ *   SLACK_WRITE_ALLOWLIST    (comma-separated Slack user IDs allowed to write)
+ *
+ * Slack Event Subscriptions Request URL:  https://<your-host>/slack/events
+ */
+
+import path from "path";
+import dotenv from "dotenv";
+import bolt from "@slack/bolt";
+import Anthropic from "@anthropic-ai/sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+dotenv.config({ path: path.join(__dirname, ".env") });
+
+const { App } = bolt;
+
+function need(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing required environment variable: ${name}`);
+  return v;
+}
+
+const MODEL = process.env.BOT_MODEL || "claude-sonnet-4-6";
+const PORT = Number(process.env.PORT) || 3000;
+const WRITE_ALLOWLIST = (process.env.SLACK_WRITE_ALLOWLIST || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const WRITE_PATTERN =
+  /(create|update|delete|add_|_add|assign|unassign|complete|reopen|close|win|lose|move|book|register|send|schedule|duplicate|credit|tag|untag|link|unlink|log_time|timer|upload|deactivate|remove|cancel|accept|import|reply|resume|stop)/i;
+
+function isWriteTool(name: string): boolean {
+  return WRITE_PATTERN.test(name);
+}
+function writeAllowed(slackUserId: string): boolean {
+  if (WRITE_ALLOWLIST.length === 0) return true;
+  return WRITE_ALLOWLIST.includes(slackUserId);
+}
+
+const SYSTEM_PROMPT = `You are the Peak Nine planning assistant, answering in Slack.
+You can use Teamleader tools to read and change the team's planning: projects, tasks,
+capacity (userAvailability), reservations (planned time blocks), budgets, deals and more.
+
+Rules:
+- Be accurate and concise. Slack answers should be short and skimmable.
+- Never invent numbers, IDs, dates or names. If you are unsure, say so. If a tool returns
+  nothing, say it returned nothing rather than guessing.
+- Capacity from Teamleader (userAvailability / reservations) reflects Teamleader planning ONLY.
+  It does not include Google Calendar commitments, so "free in Teamleader" can overstate real
+  availability. Mention this when it matters.
+- Durations from the planning tools are in minutes; convert to hours when you present them.
+- For revenue vs cost: revenue is the project external budget. Cost depends on internal hourly
+  rates that are NOT in Teamleader, so do not compute cost unless the user gives you the rates.
+- Before creating or changing reservations, briefly confirm what you are about to do.
+- Today's date is ${new Date().toISOString().slice(0, 10)}.`;
+
+async function main(): Promise<void> {
+  const slackBotToken = need("SLACK_BOT_TOKEN");
+  const slackSigningSecret = need("SLACK_SIGNING_SECRET");
+  const anthropicKey = need("ANTHROPIC_API_KEY");
+  need("TEAMLEADER_CLIENT_ID");
+  need("TEAMLEADER_CLIENT_SECRET");
+  need("TEAMLEADER_REFRESH_TOKEN");
+
+  const anthropic = new Anthropic({ apiKey: anthropicKey });
+
+  // ── Spawn the Teamleader MCP server and connect as an MCP client ──────────
+  const serverEntry = path.join(__dirname, "..", "dist", "index.js");
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [serverEntry],
+    env: { ...process.env } as Record<string, string>,
+  });
+  const mcp = new Client({ name: "peaknine-slackbot", version: "1.0.0" }, { capabilities: {} });
+  await mcp.connect(transport);
+
+  const listed = await mcp.listTools();
+  const anthropicTools = listed.tools.map((t) => ({
+    name: t.name,
+    description: t.description ?? "",
+    input_schema: (t.inputSchema as any) ?? { type: "object", properties: {} },
+  }));
+  console.log(`Connected to Teamleader MCP. ${anthropicTools.length} tools available.`);
+
+  async function callTool(name: string, input: any, slackUserId: string): Promise<{ text: string; isError: boolean }> {
+    if (isWriteTool(name) && !writeAllowed(slackUserId)) {
+      return {
+        isError: true,
+        text: `Blocked: "${name}" changes the plan, and you are not on the write allowlist. Ask Niels to add your Slack ID, or use a read-only request.`,
+      };
+    }
+    try {
+      const res: any = await mcp.callTool({ name, arguments: input || {} });
+      const text = Array.isArray(res?.content)
+        ? res.content.map((c: any) => (typeof c?.text === "string" ? c.text : JSON.stringify(c))).join("\n")
+        : JSON.stringify(res);
+      return { text: text || "(no content)", isError: !!res?.isError };
+    } catch (e: any) {
+      return { isError: true, text: `Tool ${name} failed: ${e?.message || e}` };
+    }
+  }
+
+  async function ask(userText: string, slackUserId: string): Promise<string> {
+    const messages: Anthropic.MessageParam[] = [{ role: "user", content: userText }];
+    for (let step = 0; step < 10; step++) {
+      const resp = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 1500,
+        system: SYSTEM_PROMPT,
+        tools: anthropicTools as any,
+        messages,
+      });
+
+      if (resp.stop_reason === "tool_use") {
+        messages.push({ role: "assistant", content: resp.content });
+        const toolResults: Anthropic.ToolResultBlockParam[] = [];
+        for (const block of resp.content) {
+          if (block.type === "tool_use") {
+            const out = await callTool(block.name, block.input, slackUserId);
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: out.text.slice(0, 60000),
+              is_error: out.isError,
+            });
+          }
+        }
+        messages.push({ role: "user", content: toolResults });
+        continue;
+      }
+
+      const text = resp.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("\n")
+        .trim();
+      return text || "(no answer)";
+    }
+    return "I took too many steps without finishing. Try a more specific question.";
+  }
+
+  // ── Slack wiring (Events API / HTTP) ──────────────────────────────────────
+  const app = new App({ token: slackBotToken, signingSecret: slackSigningSecret });
+
+  // Dedupe Slack retries (Slack resends an event if it doesn't get a fast 200).
+  const seen = new Set<string>();
+  function firstTime(id: string | undefined): boolean {
+    if (!id) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    if (seen.size > 1000) seen.clear();
+    return true;
+  }
+
+  async function handle(text: string, slackUserId: string, say: any, threadTs: string) {
+    const cleaned = text.replace(/<@[A-Z0-9]+>/g, "").trim();
+    if (!cleaned) {
+      await say({ text: "Ask me about the team's planning, capacity, projects or reservations.", thread_ts: threadTs });
+      return;
+    }
+    try {
+      const answer = await ask(cleaned, slackUserId);
+      await say({ text: answer.slice(0, 3800), thread_ts: threadTs });
+    } catch (e: any) {
+      await say({ text: `Something went wrong: ${e?.message || e}`, thread_ts: threadTs });
+    }
+  }
+
+  app.event("app_mention", async ({ event, say, body }) => {
+    const e: any = event;
+    if (!firstTime((body as any)?.event_id)) return;
+    await handle(e.text || "", e.user, say, e.thread_ts || e.ts);
+  });
+
+  app.event("message", async ({ event, say, body }) => {
+    const e: any = event;
+    if (e.bot_id || e.subtype) return;
+    if (e.channel_type !== "im") return;
+    if (!firstTime((body as any)?.event_id)) return;
+    await handle(e.text || "", e.user, say, e.thread_ts || e.ts);
+  });
+
+  await app.start(PORT);
+  console.log(`⚡ Peak Nine Teamleader Slack bot running on port ${PORT} (Events API).`);
+  console.log(`   Slack Event Subscriptions Request URL: https://<your-host>/slack/events`);
+  if (WRITE_ALLOWLIST.length === 0) {
+    console.log("WARNING: SLACK_WRITE_ALLOWLIST is empty — every user can run write actions. Set it to lock writes down.");
+  } else {
+    console.log(`Write actions limited to ${WRITE_ALLOWLIST.length} allowlisted user(s).`);
+  }
+}
+
+main().catch((err) => {
+  console.error("Fatal error:", err);
+  process.exit(1);
+});

@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+bin/
+obj/
+
+# CodingMachine -- NEVER commit these
+coding-machine.json
+*.state.json
+logs/
+.claude/
+tasks/
+PROGRESS.md
+CLAUDE.md
+STATUS.md
+BACKLOG.md
+DASHBOARD.md
+.current-prompt.md
