@@ -32,14 +32,12 @@
 
 import path from "path";
 import dotenv from "dotenv";
-import bolt from "@slack/bolt";
+import { App } from "@slack/bolt";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
-
-const { App } = bolt;
 
 function need(name: string): string {
   const v = process.env[name];
