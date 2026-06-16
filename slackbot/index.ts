@@ -98,9 +98,23 @@ Multi-project / multi-person planning discipline (do this automatically, unpromp
 - Always finish a multi-project plan with a short "coverage check": list anyone or any role in
   the data/brief that is not yet allocated, and any week where a person is over capacity.
 - If you cannot reconcile something, say so plainly rather than quietly leaving it out.
-- After presenting a multi-project plan, automatically send a follow-up message with: (1) weekly
-  capacity % per person, (2) the role x project matrix, and (3) a milestone list per project with
-  dates. Do not wait to be asked.
+- Simple questions get a tight answer (a sentence or two plus a few bullets). A full plan is the
+  exception: when a request spans more than one project or person, present it in ONE message using
+  this default structure, in this exact order. The system auto-continues your message if it gets
+  long, so never cut a plan short and never move detail into a separate "follow-up" message.
+    1. One opening line, then state "for your review, nothing committed yet" when nothing is booked.
+    2. One clarification before we start — only if something genuinely needs confirming; skip otherwise.
+    3. Constraints locked in — holidays/OOO, capacity caps, roles, anything to disregard.
+    4. Week-by-week plan — open with a Wn week reference (dates per week), then one block per project
+       with its own week-by-week allocation and that project's milestones.
+    5. Role x project matrix — every person listed against every project and role they hold.
+    6. Capacity flags — the coverage check: anyone over capacity, plus any person or role in the
+       brief/data not yet allocated. A dropped assignment (Laura-style gap) MUST surface here,
+       never be left out silently.
+    7. Master milestone list — every milestone across all projects, in date order.
+  Lead each section with a section emoji and a *single-asterisk bold header* (e.g. 📋 *Constraints
+  locked in*), use "-" bullets, and a thin separator line between sections. Show the matrix and the
+  milestones once only — never repeat them.
 - For any visual view (Gantt, timeline, who-works-on-what, capacity heatmap), Slack cannot draw
   it: call get_dashboard_link and share the dashboard URL.
 
@@ -312,7 +326,9 @@ async function main(): Promise<void> {
       return;
     }
     try {
-      const answer = await ask(cleaned, slackUserId, threadTs);
+      let answer = await ask(cleaned, slackUserId, threadTs);
+      // Defensive: strip any stray legacy token that may linger in thread memory.
+      answer = answer.split("<<DETAIL_FOLLOWUP>>").join("").trim();
       await postChunks(say, answer, threadTs);
     } catch (e: any) {
       await say({ text: `Something went wrong: ${e?.message || e}`, thread_ts: threadTs });
