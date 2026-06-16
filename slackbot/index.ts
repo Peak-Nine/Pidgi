@@ -197,10 +197,10 @@ async function main(): Promise<void> {
     const messages: Anthropic.MessageParam[] = [...history, { role: "user", content: userText }];
 
     let finalText = "";
-    for (let step = 0; step < 10; step++) {
+    for (let step = 0; step < 16; step++) {
       const resp = await anthropic.messages.create({
         model: MODEL,
-        max_tokens: 4000,
+        max_tokens: 8000,
         system: SYSTEM_PROMPT,
         tools: anthropicTools as any,
         messages,
@@ -224,14 +224,21 @@ async function main(): Promise<void> {
         continue;
       }
 
-      finalText = resp.content
+      // Accumulate this response's text.
+      finalText += resp.content
         .filter((b): b is Anthropic.TextBlock => b.type === "text")
         .map((b) => b.text)
-        .join("\n")
-        .trim();
+        .join("");
+
+      // If the model ran out of output room mid-answer, continue where it left off.
+      if (resp.stop_reason === "max_tokens") {
+        messages.push({ role: "assistant", content: resp.content });
+        continue;
+      }
       break;
     }
 
+    finalText = finalText.trim();
     if (!finalText) finalText = "I took too many steps without finishing. Try a more specific question.";
 
     // Persist clean text-only history (drop the intra-turn tool calls).

@@ -79,12 +79,47 @@ export async function renderDashboard(mcp: any): Promise<string> {
   const projR = await tl(mcp, "list_projects_v2", { status: "open", page_size: 100 });
   const projects = (projR.data || [])
     .map((p: any) => ({
+      id: p.id,
       title: p.title,
       start: p.start_date,
       end: p.end_date,
       revenue: (p.external_budget && p.external_budget.amount) || (p.price && p.price.amount) || 0,
     }))
     .sort((a: any, b: any) => (b.revenue || 0) - (a.revenue || 0));
+
+  // Who-works-on-what: reservations per project, grouped by person x week x project.
+  // alloc[userId][weekIndex] = { projectTitle: hours }
+  const alloc: Record<string, Record<number, Record<string, number>>> = {};
+  function weekIndexOf(dateStr: string): number {
+    for (let i = weekStarts.length - 1; i >= 0; i--) {
+      if (dateStr >= weekStarts[i]) return i;
+    }
+    return -1;
+  }
+  for (const p of projects) {
+    try {
+      const items = await tl(mcp, "list_plannable_items", { project_ids: [p.id], page_size: 100 });
+      const itemIds = (items.data || []).map((it: any) => it.id);
+      if (!itemIds.length) continue;
+      const resv = await tl(mcp, "list_reservations", {
+        plannable_item_ids: itemIds,
+        start_date: iso(start),
+        end_date: iso(end),
+      });
+      for (const r of resv.data || []) {
+        const uid = r.assignee && r.assignee.id ? r.assignee.id : null;
+        if (!uid) continue;
+        const wi = weekIndexOf(r.date);
+        if (wi < 0) continue;
+        const hrs = (r.duration?.value || 0) / 60;
+        alloc[uid] = alloc[uid] || {};
+        alloc[uid][wi] = alloc[uid][wi] || {};
+        alloc[uid][wi][p.title] = (alloc[uid][wi][p.title] || 0) + hrs;
+      }
+    } catch {
+      /* skip a project that errors */
+    }
+  }
 
   // Build capacity rows.
   const capRows = users
@@ -128,6 +163,22 @@ export async function renderDashboard(mcp: any): Promise<string> {
     )
     .join("");
 
+  const allocRows = users
+    .map((u: any) => {
+      const any = weekStarts.some((_, i) => alloc[u.id] && alloc[u.id][i] && Object.keys(alloc[u.id][i]).length);
+      if (!any) return "";
+      const tds = weekStarts
+        .map((_, i) => {
+          const cell = (alloc[u.id] && alloc[u.id][i]) || {};
+          const parts = Object.keys(cell).map((proj) => `${esc(proj)} ${Math.round(cell[proj])}h`);
+          return `<td class="who">${parts.length ? parts.join("<br>") : "<span style='color:#b4b2a9'>—</span>"}</td>`;
+        })
+        .join("");
+      return `<tr><th class="name">${esc(u.name)}</th>${tds}</tr>`;
+    })
+    .filter(Boolean)
+    .join("");
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Peak Nine — Planning dashboard</title>
@@ -146,6 +197,7 @@ td.r{text-align:right}
 .name{font-weight:600;background:#fff}
 td .h{font-weight:600}
 td .p{font-size:11px;color:#5f5e5a}
+td.who{text-align:left;font-size:12px;white-space:normal;line-height:1.45;vertical-align:top}
 .legend{display:flex;gap:14px;font-size:12px;color:#6b6a64;margin:6px 0 0}
 .legend span{display:flex;align-items:center;gap:5px}
 .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
@@ -157,6 +209,9 @@ td .p{font-size:11px;color:#5f5e5a}
 <h2>Team capacity — next 6 weeks (planned / available, % allocated)</h2>
 <table><thead><tr><th class="name">Person</th>${headCols}</tr></thead><tbody>${bodyRows || `<tr><td colspan="7">No availability data.</td></tr>`}</tbody></table>
 <div class="legend"><span><i class="sw" style="background:#d8f0e2"></i>&le;50%</span><span><i class="sw" style="background:#fdf0c8"></i>50–85%</span><span><i class="sw" style="background:#fbd9b0"></i>85–100%</span><span><i class="sw" style="background:#f6c0c0"></i>over capacity</span></div>
+
+<h2>Who works on what — next 6 weeks (planned hours per project)</h2>
+<table><thead><tr><th class="name">Person</th>${headCols}</tr></thead><tbody>${allocRows || `<tr><td colspan="7">No reservations booked in this window yet.</td></tr>`}</tbody></table>
 
 <h2>Open projects</h2>
 <table><thead><tr><th class="name">Project</th><th style="text-align:left">Window (lead time)</th><th class="r">Revenue</th></tr></thead><tbody>${projRows || `<tr><td colspan="3">No open projects.</td></tr>`}</tbody></table>
