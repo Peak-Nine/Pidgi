@@ -37,6 +37,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { gcalEnabled, gcalToolDefs, handleGcalTool } from "./gcal.js";
+import { notionEnabled, notionToolDefs, handleNotionTool } from "./notion.js";
 import { renderDashboard, dashboardLink } from "./dashboard.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
@@ -55,7 +56,7 @@ const WRITE_ALLOWLIST = (process.env.SLACK_WRITE_ALLOWLIST || "")
   .filter(Boolean);
 
 const WRITE_PATTERN =
-  /(create|update|delete|add_|_add|assign|unassign|complete|reopen|close|win|lose|move|book|register|send|schedule|duplicate|credit|tag|untag|link|unlink|log_time|timer|upload|deactivate|remove|cancel|accept|import|reply|resume|stop)/i;
+  /(create|update|delete|add_|_add|append|assign|unassign|complete|reopen|close|win|lose|move|book|register|send|schedule|duplicate|credit|tag|untag|link|unlink|log_time|timer|upload|deactivate|remove|cancel|accept|import|reply|resume|stop)/i;
 
 function isWriteTool(name: string): boolean {
   return WRITE_PATTERN.test(name);
@@ -72,6 +73,11 @@ You can also read and write Google Calendars via the gcal_* tools, but only for 
 shared with the bot. Google Calendar holds people's REAL meetings and commitments that
 Teamleader planning misses, so use gcal_list_events to judge true availability, and
 gcal_create_event / gcal_update_event to book or move actual meetings.
+If notion_* tools are available, you can also read and update Notion project pages and
+databases (only those shared with the bot): search to find the page or database, read it to
+learn its exact property names and block IDs, then create pages, append content, update
+properties (e.g. a status), or edit a block. Always read a page or database before changing
+it, and confirm what you're about to write before doing it.
 
 Formatting for Slack (important):
 - Slack does NOT render Markdown. Use Slack mrkdwn: *single asterisks* for bold (never **double**),
@@ -166,6 +172,13 @@ async function main(): Promise<void> {
     console.log("Google Calendar tools disabled (set GOOGLE_SERVICE_ACCOUNT_JSON to enable).");
   }
 
+  if (notionEnabled()) {
+    anthropicTools.push(...(notionToolDefs as any[]));
+    console.log(`Notion tools enabled (${notionToolDefs.length}).`);
+  } else {
+    console.log("Notion tools disabled (set NOTION_TOKEN to enable).");
+  }
+
   if (process.env.DASHBOARD_KEY && process.env.PUBLIC_BASE_URL) {
     anthropicTools.push({
       name: "get_dashboard_link",
@@ -188,6 +201,9 @@ async function main(): Promise<void> {
     }
     if (name.startsWith("gcal_")) {
       return handleGcalTool(name, input);
+    }
+    if (name.startsWith("notion_")) {
+      return handleNotionTool(name, input);
     }
     try {
       const res: any = await mcp.callTool({ name, arguments: input || {} });
