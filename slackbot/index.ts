@@ -66,6 +66,27 @@ function writeAllowed(slackUserId: string): boolean {
   return WRITE_ALLOWLIST.includes(slackUserId);
 }
 
+// Easter egg: a lone dove emoji 🕊️ (or :dove:) summons Pidgi's pigeon alter-ego.
+const DOVE_GIF =
+  "https://media1.giphy.com/media/9hAgbFY0BZnf1YYdaM/giphy-downsized.gif?cid=6104955e9k26e2274pbxjbv0qgbuyw38tnojqne8dsapenmz&ep=v1_gifs_translate&rid=giphy-downsized.gif&ct=g";
+const PIGEON_LINES = [
+  "Coo. You rang? 🕊️",
+  "A dove? Bold. I'm a pigeon with a deadline, but I'll take the promotion. 🕊️",
+  "Peace be upon this planning. 🕊️",
+  "You summoned the bird. Deploying maximum coo. 🕊️",
+  "Rats with wings? We prefer 'urban doves'. 🕊️",
+  "One coo to rule the schedule. 🕊️",
+];
+
+// True only when the message is essentially just dove emoji (or the :dove: shortcode),
+// so it never hijacks a real question that happens to contain a 🕊️.
+function doveTrigger(text: string): boolean {
+  const t = text.trim();
+  if (/^:dove(?:_of_peace)?:$/.test(t)) return true;
+  const doves = t.replace(/[️‍\s]/g, ""); // strip variation selectors, ZWJ, spaces
+  return doves.length > 0 && Array.from(doves).every((ch) => ch === "\u{1F54A}");
+}
+
 const SYSTEM_PROMPT = `You are the Peak Nine planning assistant, answering in Slack.
 You can use Teamleader tools to read and change the team's planning: projects, tasks,
 capacity (userAvailability), reservations (planned time blocks), budgets, deals and more.
@@ -360,6 +381,11 @@ async function main(): Promise<void> {
     const cleaned = text.replace(/<@[A-Z0-9]+>/g, "").trim();
     if (!cleaned) {
       await say({ text: "Ask me about the team's planning, capacity, projects or reservations.", thread_ts: replyThreadTs });
+      return;
+    }
+    if (doveTrigger(cleaned)) {
+      const line = PIGEON_LINES[Math.floor(Math.random() * PIGEON_LINES.length)];
+      await say({ text: `${line}\n${DOVE_GIF}`, thread_ts: replyThreadTs });
       return;
     }
     try {
