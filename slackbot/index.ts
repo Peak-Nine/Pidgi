@@ -38,7 +38,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { gcalEnabled, gcalToolDefs, handleGcalTool } from "./gcal.js";
 import { notionEnabled, notionToolDefs, handleNotionTool } from "./notion.js";
-import { renderDashboard, dashboardLink } from "./dashboard.js";
+import { renderShell, gatherDashboardData, dashboardLink } from "./dashboard.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -313,17 +313,32 @@ async function main(): Promise<void> {
   const receiver = new ExpressReceiver({ signingSecret: slackSigningSecret });
   const app = new App({ token: slackBotToken, receiver });
 
-  // Read-only live dashboard at /dashboard?key=DASHBOARD_KEY
-  receiver.router.get("/dashboard", async (req: any, res: any) => {
+  // Dashbird 🐦 — interactive live dashboard.
+  function dashKeyOk(req: any, res: any): boolean {
     const key = process.env.DASHBOARD_KEY;
-    if (!key) { res.status(404).send("Dashboard disabled (set DASHBOARD_KEY)."); return; }
-    if (req.query.key !== key) { res.status(401).send("Unauthorized"); return; }
+    if (!key) { res.status(404).send("Dashboard disabled (set DASHBOARD_KEY)."); return false; }
+    if (req.query.key !== key) { res.status(401).send("Unauthorized"); return false; }
+    return true;
+  }
+
+  // The HTML shell (client fetches /dashboard/data for the live numbers).
+  receiver.router.get("/dashboard", (req: any, res: any) => {
+    if (!dashKeyOk(req, res)) return;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(renderShell());
+  });
+
+  // Live JSON for the selected window.
+  receiver.router.get("/dashboard/data", async (req: any, res: any) => {
+    if (!dashKeyOk(req, res)) return;
     try {
-      const html = await renderDashboard(mcp);
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(html);
+      const weeks = Number(req.query.weeks) || 6;
+      const start = typeof req.query.start === "string" ? req.query.start : undefined;
+      const data = await gatherDashboardData(mcp, start, weeks);
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.json(data);
     } catch (e: any) {
-      res.status(500).send("Dashboard error: " + (e?.message || e));
+      res.status(500).json({ error: e?.message || String(e) });
     }
   });
 
