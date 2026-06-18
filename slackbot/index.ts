@@ -385,7 +385,13 @@ async function main(): Promise<void> {
     }
     if (doveTrigger(cleaned)) {
       const line = PIGEON_LINES[Math.floor(Math.random() * PIGEON_LINES.length)];
-      await say({ text: `${line}\n${DOVE_GIF}`, thread_ts: replyThreadTs });
+      // Whole sentence IS the link, so the raw URL is never shown. No unfurl.
+      await say({
+        text: `<${DOVE_GIF}|${line}>`,
+        thread_ts: replyThreadTs,
+        unfurl_links: false,
+        unfurl_media: false,
+      });
       return;
     }
     try {
@@ -408,10 +414,18 @@ async function main(): Promise<void> {
   app.event("message", async ({ event, say }) => {
     const e: any = event;
     if (e.bot_id || e.subtype) return;
-    if (e.channel_type !== "im") return;
     if (!firstTime(`${e.channel}:${e.ts}`)) return;
-    // Plain DM: reply at the top level (stay in a thread only if already in one).
-    await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
+    if (e.channel_type === "im") {
+      // Plain DM: full assistant, reply top-level (stay in a thread only if in one).
+      await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
+      return;
+    }
+    // In channels/groups Pidgi stays silent EXCEPT for a solo 🕊️ summon, so it
+    // never runs the assistant on normal channel chatter, only the easter egg.
+    const channelText = (e.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+    if (doveTrigger(channelText)) {
+      await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
+    }
   });
 
   await app.start(PORT);
