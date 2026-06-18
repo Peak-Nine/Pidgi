@@ -256,9 +256,6 @@ td.day{text-align:left;vertical-align:top;min-width:120px;white-space:normal;pad
 
   <h2>Who works on what — day by day</h2>
   <div class="scroll"><table id="grid"></table></div>
-
-  <h2>Open projects</h2>
-  <div class="scroll"><table id="proj"></table></div>
 </div>
 
 <div id="drill"><span class="x" onclick="document.getElementById('drill').style.display='none'">×</span><div id="drillbody"></div></div>
@@ -273,7 +270,6 @@ td.day{text-align:left;vertical-align:top;min-width:120px;white-space:normal;pad
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   function hrs(h){ return (Math.round(h*10)/10) + 'h'; }
   function capColor(u){ if(u<=0) return '#eef2f0'; if(u<=0.5) return '#d8f0e2'; if(u<=0.85) return '#fdf0c8'; if(u<=1.0) return '#fbd9b0'; return '#f6c0c0'; }
-  function eur(n){ return '€' + Math.round(n).toLocaleString('en-IE'); }
   function dlabel(d){ var x=new Date(d+'T00:00:00'); var wd=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][x.getDay()]; return wd+' '+x.getDate()+'/'+(x.getMonth()+1); }
 
   function projMap(){ var m={}; (state.data.projects||[]).forEach(function(p){ m[p.id]=p; }); return m; }
@@ -360,20 +356,6 @@ td.day{text-align:left;vertical-align:top;min-width:120px;white-space:normal;pad
     $('drillbody').innerHTML=h; $('drill').style.display='block';
   }
 
-  function renderProj(){
-    var d=state.data, h='<thead><tr><th class="name">Project</th><th style="text-align:left">Window</th><th class="r">Revenue</th><th class="r">Spent</th><th class="r">Remaining</th></tr></thead><tbody>';
-    var ps=(d.projects||[]).slice().sort(function(a,b){ return (b.revenue||0)-(a.revenue||0); });
-    if(!ps.length){ h+='<tr><td class="name">—</td><td colspan="4">no open projects</td></tr>'; }
-    ps.forEach(function(p){
-      h+='<tr><td class="name"><span class="dot" style="background:'+esc(p.color)+'"></span>'+esc(p.title)+'</td>'
-       +'<td style="text-align:left">'+esc(p.start||'?')+' → '+esc(p.end||'?')+'</td>'
-       +'<td class="r">'+(p.revenue?eur(p.revenue):'—')+'</td>'
-       +'<td class="r">'+(p.spent?eur(p.spent):'—')+'</td>'
-       +'<td class="r">'+(p.remaining?eur(p.remaining):'—')+'</td></tr>';
-    });
-    h+='</tbody>'; $('proj').innerHTML=h;
-  }
-
   function populateFilters(){
     var pSel=$('person'); pSel.innerHTML='<option value="all">Everyone</option>';
     (state.data.users||[]).forEach(function(u){ var o=document.createElement('option'); o.value=u.id; o.textContent=u.name; pSel.appendChild(o); });
@@ -383,7 +365,7 @@ td.day{text-align:left;vertical-align:top;min-width:120px;white-space:normal;pad
     prSel.value=state.project;
   }
 
-  function renderAll(){ renderCap(); renderGrid(); renderProj(); }
+  function renderAll(){ renderCap(); renderGrid(); }
 
   function load(){
     $('msg').style.display='block'; $('msg').textContent='Loading live data…'; $('content').style.display='none';

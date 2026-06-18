@@ -353,8 +353,9 @@ async function main(): Promise<void> {
   }
 
   // convoKey      = where memory is filed (the channel/DM; one continuous memory).
-  // replyThreadTs = where the reply is posted (a thread under the user's message,
-  //                 or the existing thread if they were already in one).
+  // replyThreadTs = where the reply is posted: undefined posts at the top level,
+  //                 a thread ts posts inside that thread. Callers decide the rule:
+  //                 @mentions reply in a thread, plain DMs reply top-level.
   async function handle(text: string, slackUserId: string, say: any, convoKey: string, replyThreadTs?: string) {
     const cleaned = text.replace(/<@[A-Z0-9]+>/g, "").trim();
     if (!cleaned) {
@@ -371,18 +372,20 @@ async function main(): Promise<void> {
     }
   }
 
-  app.event("app_mention", async ({ event, say, body }) => {
+  app.event("app_mention", async ({ event, say }) => {
     const e: any = event;
-    if (!firstTime((body as any)?.event_id)) return;
+    if (!firstTime(`${e.channel}:${e.ts}`)) return;
+    // @mention: reply in a thread (under the mention, or the existing thread).
     await handle(e.text || "", e.user, say, e.channel, e.thread_ts || e.ts);
   });
 
-  app.event("message", async ({ event, say, body }) => {
+  app.event("message", async ({ event, say }) => {
     const e: any = event;
     if (e.bot_id || e.subtype) return;
     if (e.channel_type !== "im") return;
-    if (!firstTime((body as any)?.event_id)) return;
-    await handle(e.text || "", e.user, say, e.channel, e.thread_ts || e.ts);
+    if (!firstTime(`${e.channel}:${e.ts}`)) return;
+    // Plain DM: reply at the top level (stay in a thread only if already in one).
+    await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
   });
 
   await app.start(PORT);
