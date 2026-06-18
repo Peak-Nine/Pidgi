@@ -216,10 +216,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // Per-conversation memory: a clean text-only history keyed by conversation,
-  // NOT by individual message. The key is the Slack thread if the user is in a
-  // thread, otherwise the channel (the DM itself), so consecutive top-level
-  // messages in a DM share one continuous memory and follow-ups keep context.
+  // Per-conversation memory: a clean text-only history keyed by the channel
+  // (the DM itself), NOT by individual message or thread. Every message in the
+  // conversation therefore shares one continuous memory, whether you type at the
+  // top level or inside a thread, so context never resets mid-conversation.
   // In-memory only, so it resets if the service restarts/redeploys.
   const threadHistory = new Map<string, Anthropic.MessageParam[]>();
   const HISTORY_MAX = 20; // keep the last ~10 exchanges per conversation
@@ -337,9 +337,9 @@ async function main(): Promise<void> {
     return true;
   }
 
-  // convoKey  = where memory is filed (thread if threaded, else the channel/DM).
-  // replyThreadTs = where the reply is posted (in-thread only if the user was in
-  //                 a thread; otherwise undefined = a normal top-level message).
+  // convoKey      = where memory is filed (the channel/DM; one continuous memory).
+  // replyThreadTs = where the reply is posted (a thread under the user's message,
+  //                 or the existing thread if they were already in one).
   async function handle(text: string, slackUserId: string, say: any, convoKey: string, replyThreadTs?: string) {
     const cleaned = text.replace(/<@[A-Z0-9]+>/g, "").trim();
     if (!cleaned) {
@@ -359,7 +359,7 @@ async function main(): Promise<void> {
   app.event("app_mention", async ({ event, say, body }) => {
     const e: any = event;
     if (!firstTime((body as any)?.event_id)) return;
-    await handle(e.text || "", e.user, say, e.thread_ts || e.channel, e.thread_ts);
+    await handle(e.text || "", e.user, say, e.channel, e.thread_ts || e.ts);
   });
 
   app.event("message", async ({ event, say, body }) => {
@@ -367,7 +367,7 @@ async function main(): Promise<void> {
     if (e.bot_id || e.subtype) return;
     if (e.channel_type !== "im") return;
     if (!firstTime((body as any)?.event_id)) return;
-    await handle(e.text || "", e.user, say, e.thread_ts || e.channel, e.thread_ts);
+    await handle(e.text || "", e.user, say, e.channel, e.thread_ts || e.ts);
   });
 
   await app.start(PORT);
