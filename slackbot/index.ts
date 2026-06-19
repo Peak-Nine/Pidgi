@@ -48,6 +48,14 @@ function need(name: string): string {
   return v;
 }
 
+// Race a promise against a timeout so a single stalled call can never hang a whole turn.
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
 const MODEL = process.env.BOT_MODEL || "claude-sonnet-4-6";
 const PORT = Number(process.env.PORT) || 3000;
 const WRITE_ALLOWLIST = (process.env.SLACK_WRITE_ALLOWLIST || "")
@@ -157,7 +165,12 @@ Setting up a NEW project (when asked to "set up", "spin up", "launch" or "create
 Do these in order. First present the whole plan (channel name, page location, meeting times, welcome draft) and get the user's OK, because every step below creates something real.
 1. Load it: teamleader_get_project_v2 (title, customer, start/end, external_budget) and teamleader_get_company (client name). Get the crew from the project assignees and confirm with the user who counts as "the whole team" for onboarding.
 2. Slack channel: FIRST call find_slack_channels with the client/program name. If a matching channel already exists, propose reusing it rather than creating a duplicate. Only if none exists, propose a name like "[client]-[program]", then create_slack_channel and invite the crew's Slack user IDs. If creation fails with a permissions error, tell the user the bot still needs channel-management scope.
-3. Notion project page: FIRST notion_search for an existing page for this client/program. If one exists, REUSE it and add only the missing pieces below — never create a duplicate project page. Only if none exists, create the project page under the "Projects" area with notion_create_page. On the project page, make sure these exist (create only the ones that are missing):
+3. Notion project page. The rich project page (about the client, the proposal context, stakeholders, the deep narrative) is authored by the Cowork skills, NOT by you — do not try to write that content. Your job is to find that page and add your operational pieces to it.
+   - FIND it robustly: notion_search the client/program name, then for the likely candidates notion_get_page and check whether the page links to THIS project's Teamleader URL or project id. The matching page is the real one even if it is titled differently (e.g. "old"). Match on the Teamleader link, not just the title.
+   - If you find it, REUSE it: add only the pieces below that are missing. Never create a second project page for a project that already has one.
+   - If you cannot confidently identify the page, ASK the user for the link instead of creating a new one.
+   - Only if the user confirms none exists, create a light project page under the "Projects" area with notion_create_page and note that the skills will enrich it later.
+   On the project page, make sure these exist (create only the ones that are missing):
    - An Agenda database via notion_create_database, columns EXACTLY: Task (title), Creator (person), Assignee (person), Priority (select: High, Medium, Low), Status (select: Not started, In progress, Wait P9 feedback, Done), Deadline (date). Note once that Status is a select because the API can't create a true status field.
    - A "Crew onboarding" sub-page (notion_create_page under the project page) with sections: the project in one line and why it matters; the client and the challenge; goals and success criteria; scope and gates; team and roles; ways of working and where things live; key links (Teamleader, Canva, Drive, Slack); access and tools checklist; first-week plan.
    - A "🔍 Kickoff — 30 Clarifying Questions" sub-page organised into 7 themes: Field reality on the ground; The payer and sustainability question; Client organisation's internal dynamics; The evidence base; Field mission / country context; The key decision moment and architecture; Collaboration setup. Write project-specific questions where you can; otherwise leave the theme prompts. (The kickoff-deck skill writes the deep version, so keep this light if that will run later.)
@@ -438,20 +451,28 @@ async function main(): Promise<void> {
 
     let finalText = "";
     for (let step = 0; step < 16; step++) {
-      const resp = await anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 8000,
-        system,
-        tools: anthropicTools as any,
-        messages,
-      });
+      const resp = await anthropic.messages.create(
+        {
+          model: MODEL,
+          max_tokens: 8000,
+          system,
+          tools: anthropicTools as any,
+          messages,
+        },
+        { timeout: 150000 }
+      );
 
       if (resp.stop_reason === "tool_use") {
         messages.push({ role: "assistant", content: resp.content });
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         for (const block of resp.content) {
           if (block.type === "tool_use") {
-            const out = await callTool(block.name, block.input, slackUserId);
+            let out: { text: string; isError: boolean };
+            try {
+              out = await withTimeout(callTool(block.name, block.input, slackUserId), 90000, `Tool ${block.name}`);
+            } catch (e: any) {
+              out = { isError: true, text: `Tool ${block.name} did not finish: ${e?.message || e}` };
+            }
             toolResults.push({
               type: "tool_result",
               tool_use_id: block.id,
