@@ -60,6 +60,11 @@ export const gcalToolDefs = [
         description: { type: "string" },
         location: { type: "string" },
         attendees: { type: "array", items: { type: "string" }, description: "Attendee emails" },
+        recurrence: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional RFC5545 RRULE strings for a recurring event, e.g. ['RRULE:FREQ=WEEKLY;BYDAY=TU;COUNT=12']",
+        },
         time_zone: { type: "string", description: `IANA timezone, default ${DEFAULT_TZ}` },
       },
       required: ["calendar_email", "summary", "start", "end"],
@@ -135,6 +140,7 @@ export async function handleGcalTool(name: string, input: any): Promise<{ text: 
           start: { dateTime: input.start, timeZone: tz },
           end: { dateTime: input.end, timeZone: tz },
           attendees: (input.attendees || []).map((email: string) => ({ email })),
+          ...(Array.isArray(input.recurrence) && input.recurrence.length ? { recurrence: input.recurrence } : {}),
         },
       });
       return { text: JSON.stringify({ id: res.data.id, htmlLink: res.data.htmlLink }, null, 2), isError: false };

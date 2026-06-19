@@ -95,6 +95,34 @@ function toBlocks(blocks: any[]): any[] {
   });
 }
 
+// Convert a simple [{name, type, options?}] column spec into Notion DB properties.
+// Notion's API cannot create a true "status" property, so "status" -> "select".
+function buildDbProperties(columns: any[]): any {
+  const props: any = {};
+  let hasTitle = false;
+  for (const c of columns || []) {
+    const name = c?.name;
+    if (!name) continue;
+    const type = String(c?.type || "text").toLowerCase();
+    if (type === "title") { props[name] = { title: {} }; hasTitle = true; }
+    else if (type === "text" || type === "rich_text") props[name] = { rich_text: {} };
+    else if (type === "person" || type === "people") props[name] = { people: {} };
+    else if (type === "date") props[name] = { date: {} };
+    else if (type === "number") props[name] = { number: {} };
+    else if (type === "checkbox") props[name] = { checkbox: {} };
+    else if (type === "url") props[name] = { url: {} };
+    else if (type === "select" || type === "status" || type === "multi_select") {
+      const opts = (c.options || []).map((o: any) => (typeof o === "string" ? { name: o } : { name: o.name, color: o.color }));
+      props[name] = type === "multi_select" ? { multi_select: { options: opts } } : { select: { options: opts } };
+    } else props[name] = { rich_text: {} };
+  }
+  if (!hasTitle) {
+    const first = (columns || [])[0]?.name;
+    props[first || "Name"] = { title: {} };
+  }
+  return props;
+}
+
 export const notionToolDefs = [
   {
     name: "notion_search",
@@ -201,6 +229,25 @@ export const notionToolDefs = [
       required: ["block_id", "text"],
     },
   },
+  {
+    name: "notion_create_database",
+    description:
+      "Create a new Notion database (e.g. a project Agenda) under a page. Provide parent_page_id, a title, and columns. Each column is {name, type, options?}. type is one of: title, text, person, date, number, checkbox, url, select, status, multi_select. Exactly one column must be type 'title'. IMPORTANT: Notion's API cannot create a true 'status' property, so 'status' is created as a 'select' with the same options. By default the database is created inline on the page. Add rows afterwards with notion_create_page using parent_database_id.",
+    input_schema: {
+      type: "object",
+      properties: {
+        parent_page_id: { type: "string", description: "Page the database lives under" },
+        title: { type: "string", description: "Database title" },
+        inline: { type: "boolean", description: "Show inline on the page (default true)" },
+        columns: {
+          type: "array",
+          description: "[{name, type, options?}]; options is a list of strings or {name,color} for select/status/multi_select.",
+          items: { type: "object" },
+        },
+      },
+      required: ["parent_page_id", "title", "columns"],
+    },
+  },
 ];
 
 export async function handleNotionTool(name: string, input: any): Promise<{ text: string; isError: boolean }> {
@@ -303,6 +350,18 @@ export async function handleNotionTool(name: string, input: any): Promise<{ text
       body[type] = { rich_text: [{ type: "text", text: { content: input.text } }] };
       const res: any = await c.blocks.update(body);
       return { text: JSON.stringify({ id: res.id, updated: true }, null, 2), isError: false };
+    }
+
+    if (name === "notion_create_database") {
+      if (!input.parent_page_id) return { text: "notion_create_database needs parent_page_id.", isError: true };
+      const params: any = {
+        parent: { type: "page_id", page_id: input.parent_page_id },
+        title: [{ type: "text", text: { content: input.title || "Database" } }],
+        is_inline: input.inline !== false,
+        properties: buildDbProperties(input.columns || []),
+      };
+      const res: any = await c.databases.create(params);
+      return { text: JSON.stringify({ id: res.id, url: res.url }, null, 2), isError: false };
     }
 
     return { text: `Unknown Notion tool: ${name}`, isError: true };
