@@ -64,7 +64,7 @@ const WRITE_ALLOWLIST = (process.env.SLACK_WRITE_ALLOWLIST || "")
   .filter(Boolean);
 
 const WRITE_PATTERN =
-  /(create|update|delete|add_|_add|append|assign|unassign|complete|reopen|close|win|lose|move|book|register|send|schedule|duplicate|credit|tag|untag|link|unlink|log_time|timer|upload|deactivate|remove|cancel|accept|import|reply|resume|stop)/i;
+  /(create|update|delete|add_|_add|append|assign|unassign|complete|reopen|close|win|lose|move|book|register|send|schedule|duplicate|credit|tag|untag|link|unlink|log_time|timer|upload|deactivate|remove|cancel|accept|import|reply|resume|stop|invite)/i;
 
 function isWriteTool(name: string): boolean {
   return WRITE_PATTERN.test(name);
@@ -164,7 +164,7 @@ Multi-project / multi-person planning discipline (do this automatically, unpromp
 Setting up a NEW project (when asked to "set up", "spin up", "launch" or "create the workspace for" a project):
 Do these in order. First present the WHOLE plan (channel name, page location, meeting times and attendees, welcome draft) and get an explicit, formal go. A plan is not a go — wait for a clear yes before you create, change, invite, post or book anything.
 1. Load it: teamleader_get_project_v2 (title, customer, start/end, external_budget) and teamleader_get_company (client name). Get the crew from the project assignees and confirm with the user who counts as "the whole team" for onboarding. Always ASK who holds which role (lead, support, design, etc.) and wait for the user to confirm before you state roles anywhere — the Teamleader assignees tell you who is involved, not what their role is. Never assume or invent a person's role.
-2. Slack channel: FIRST call find_slack_channels with the client/program name. If a matching channel already exists, propose reusing it rather than creating a duplicate. Only if none exists, propose a name like "[client]-[program]", then create_slack_channel and invite the crew's Slack user IDs. If creation fails with a permissions error, tell the user the bot still needs channel-management scope.
+2. Slack channel: FIRST call find_slack_channels with the client/program name. If a matching channel already exists, propose reusing it. Either way, make sure the WHOLE crew ends up as members: resolve their Slack IDs with lookup_slack_users (from their emails), then for a NEW channel pass those IDs to create_slack_channel, and for an EXISTING channel invite them with invite_to_slack_channel. Don't assume people are already in the channel — invite them. If a call fails with a permissions error, tell the user the bot still needs the matching scope (channels:manage to invite).
 3. Notion project page. The rich project page (about the client, the proposal context, stakeholders, the deep narrative) is authored by the Cowork skills, NOT by you — do not try to write that content. Your job is to find that page and add your operational pieces to it.
    - FIND it robustly: notion_search the client/program name, then for the likely candidates notion_get_page and check whether the page links to THIS project's Teamleader URL or project id. The matching page is the real one even if it is titled differently (e.g. "old"). Match on the Teamleader link, not just the title.
    - If you find it, REUSE it: add only the pieces below that are missing. Never create a second project page for a project that already has one.
@@ -177,7 +177,7 @@ Do these in order. First present the WHOLE plan (channel name, page location, me
    Always add every person who should be in the meeting as a real attendee (their email) on gcal_create_event — never create a team meeting with an empty attendee list. Put the Agenda database page link in the event description.
    - Crew onboarding: once, in the project's first week, with the WHOLE team as attendees, 45 minutes, at the earliest slot that is free for everyone (check each person with gcal_list_events first).
    - Weekly sync: ONLY if the project external_budget is €10,000 or more. 30 min, the project crew only (not the whole studio) as attendees, as ONE weekly recurring event for the project's duration (use the recurrence field, e.g. ["RRULE:FREQ=WEEKLY;COUNT=N"]). Pick a fixed weekday/time that is free for the crew and outside the lunch window, and link the Agenda page in the description. If under €10k, skip the weekly sync and say why.
-5. Channel bookmarks: once the channel exists and the Notion page and Agenda are in place, add these channel bookmarks with add_slack_bookmarks: Teamleader (use the URL format https://focus.teamleader.eu/projects/[project_id]/work-breakdown), the Notion project page (its real URL), and the Team Agenda (the Agenda database's URL). Skip any whose link you don't actually have rather than guessing.
+5. Channel bookmarks: once the channel exists and the Notion page and Agenda are in place, FIRST call list_slack_bookmarks and only add_slack_bookmarks for links that are not already there (never create a duplicate bookmark). The three bookmarks are: Teamleader (URL format https://focus.teamleader.eu/projects/[project_id]/work-breakdown), the Notion project page (its real URL), and the Team Agenda (the Agenda database's own page URL). If duplicates already exist on the channel, remove the extras with remove_slack_bookmark. Skip any whose link you don't actually have rather than guessing.
 6. Welcome message: draft a short message for the new channel (what the project is, crew and roles, onboarding time and any weekly-sync time, links to the Notion page and the Teamleader project), show it for approval, then post with send_slack_message.
 
 Accuracy:
@@ -311,9 +311,56 @@ async function main(): Promise<void> {
         },
         required: ["channel", "bookmarks"],
       },
+    } as any,
+    {
+      name: "lookup_slack_users",
+      description:
+        "Resolve people to Slack user IDs so they can be invited or mentioned. Pass emails (preferred) and/or a name query. Returns matching Slack user IDs. Requires users:read and users:read.email.",
+      input_schema: {
+        type: "object",
+        properties: {
+          emails: { type: "array", items: { type: "string" }, description: "Emails to resolve to Slack IDs" },
+          query: { type: "string", description: "Optional name substring to match" },
+        },
+      },
+    } as any,
+    {
+      name: "invite_to_slack_channel",
+      description:
+        "Invite one or more users (by Slack user ID) to an EXISTING channel. Get the IDs from lookup_slack_users first. Requires channel-management permission.",
+      input_schema: {
+        type: "object",
+        properties: {
+          channel: { type: "string", description: "Channel ID" },
+          user_ids: { type: "array", items: { type: "string" }, description: "Slack user IDs to invite" },
+        },
+        required: ["channel", "user_ids"],
+      },
+    } as any,
+    {
+      name: "list_slack_bookmarks",
+      description:
+        "List the bookmarks already on a channel (id, title, link). Always call this before adding bookmarks, to avoid duplicates. Requires bookmarks:read.",
+      input_schema: {
+        type: "object",
+        properties: { channel: { type: "string", description: "Channel ID" } },
+        required: ["channel"],
+      },
+    } as any,
+    {
+      name: "remove_slack_bookmark",
+      description: "Remove one channel bookmark by its bookmark_id (from list_slack_bookmarks). Requires bookmarks:write.",
+      input_schema: {
+        type: "object",
+        properties: {
+          channel: { type: "string", description: "Channel ID" },
+          bookmark_id: { type: "string", description: "Bookmark ID to remove" },
+        },
+        required: ["channel", "bookmark_id"],
+      },
     } as any
   );
-  console.log("Slack admin tools enabled (find/create channel, send message, add bookmarks).");
+  console.log("Slack admin tools enabled (find/create/invite channel, send message, bookmarks list/add/remove, user lookup).");
 
   // Assigned once the Bolt app is built (see below); used by the Slack admin tools.
   let slackWeb: any = null;
@@ -409,6 +456,59 @@ async function main(): Promise<void> {
         return { isError: false, text: JSON.stringify({ added }) };
       } catch (e: any) {
         return { isError: true, text: `add_slack_bookmarks failed: ${e?.data?.error || e?.message || e}` };
+      }
+    }
+    if (name === "lookup_slack_users") {
+      try {
+        const users: any[] = [];
+        for (const email of Array.isArray(input.emails) ? input.emails : []) {
+          try {
+            const r: any = await slackWeb.users.lookupByEmail({ email: String(email) });
+            users.push({ email, id: r?.user?.id, name: r?.user?.real_name || r?.user?.profile?.real_name });
+          } catch (e: any) {
+            users.push({ email, error: e?.data?.error || String(e) });
+          }
+        }
+        if (input.query) {
+          const q = String(input.query).toLowerCase();
+          const r: any = await slackWeb.users.list({ limit: 1000 });
+          for (const m of r?.members || []) {
+            const nm = `${m?.real_name || ""} ${m?.profile?.display_name || ""}`.toLowerCase();
+            if (!m?.deleted && !m?.is_bot && nm.includes(q)) users.push({ id: m.id, name: m.real_name, email: m?.profile?.email });
+          }
+        }
+        return { isError: false, text: JSON.stringify({ users }) };
+      } catch (e: any) {
+        return { isError: true, text: `lookup_slack_users failed: ${e?.data?.error || e?.message || e}` };
+      }
+    }
+    if (name === "invite_to_slack_channel") {
+      try {
+        const ids = Array.isArray(input.user_ids) ? input.user_ids : [];
+        if (!input.channel || !ids.length) return { isError: true, text: "invite_to_slack_channel needs channel and user_ids." };
+        const r: any = await slackWeb.conversations.invite({ channel: String(input.channel), users: ids.join(",") });
+        return { isError: false, text: JSON.stringify({ ok: r?.ok, channel: r?.channel?.id || input.channel }) };
+      } catch (e: any) {
+        const err = e?.data?.error || e?.message || String(e);
+        // "already_in_channel" is a success for our purposes.
+        return { isError: !/already_in_channel/i.test(String(err)), text: `invite_to_slack_channel: ${err}` };
+      }
+    }
+    if (name === "list_slack_bookmarks") {
+      try {
+        const r: any = await slackWeb.bookmarks.list({ channel_id: String(input.channel) });
+        const items = (r?.bookmarks || []).map((b: any) => ({ id: b.id, title: b.title, link: b.link }));
+        return { isError: false, text: JSON.stringify({ bookmarks: items }) };
+      } catch (e: any) {
+        return { isError: true, text: `list_slack_bookmarks failed: ${e?.data?.error || e?.message || e}` };
+      }
+    }
+    if (name === "remove_slack_bookmark") {
+      try {
+        await slackWeb.bookmarks.remove({ channel_id: String(input.channel), bookmark_id: String(input.bookmark_id) });
+        return { isError: false, text: JSON.stringify({ removed: input.bookmark_id }) };
+      } catch (e: any) {
+        return { isError: true, text: `remove_slack_bookmark failed: ${e?.data?.error || e?.message || e}` };
       }
     }
     try {
