@@ -518,9 +518,9 @@ async function main(): Promise<void> {
     return finalText;
   }
 
-  // Post a (possibly long) answer as one or more Slack messages in the thread,
-  // splitting on paragraph boundaries to stay under Slack's ~3000-char limit.
-  async function postChunks(say: any, text: string, threadTs?: string): Promise<void> {
+  // Split a (possibly long) answer into Slack-sized pieces (~3000-char limit),
+  // breaking on paragraph boundaries.
+  function chunkText(text: string): string[] {
     const MAX = 2900;
     const chunks: string[] = [];
     let buf = "";
@@ -538,8 +538,26 @@ async function main(): Promise<void> {
       }
     }
     if (buf) chunks.push(buf);
-    for (const c of chunks) {
-      await say({ text: c, thread_ts: threadTs });
+    return chunks;
+  }
+
+  // Deliver the answer by editing the "on it" placeholder into the first piece, then
+  // posting any overflow as follow-up messages. Falls back to plain posting if there is
+  // no placeholder or the edit fails.
+  async function deliver(say: any, ack: any, text: string, threadTs?: string): Promise<void> {
+    const chunks = chunkText(text);
+    if (!chunks.length) chunks.push("Done.");
+    let start = 0;
+    if (ack?.ts && ack?.channel) {
+      try {
+        await slackWeb.chat.update({ channel: ack.channel, ts: ack.ts, text: chunks[0] });
+        start = 1;
+      } catch {
+        /* placeholder edit failed — post everything below as new messages */
+      }
+    }
+    for (let i = start; i < chunks.length; i++) {
+      await say({ text: chunks[i], thread_ts: threadTs });
     }
   }
 
@@ -608,14 +626,31 @@ async function main(): Promise<void> {
       });
       return;
     }
+    // Immediate acknowledgement so the team knows Pidgi is working. This same message
+    // is then edited into the final answer, so it never leaves clutter behind.
+    let ack: any = null;
+    try {
+      ack = await say({ text: "🕊️ On it — give me a minute…", thread_ts: replyThreadTs });
+    } catch {
+      /* if the ack can't be posted, we just deliver normally below */
+    }
     try {
       const identity = await resolveIdentity(slackUserId);
       let answer = await ask(cleaned, slackUserId, convoKey, identity);
       // Defensive: strip any stray legacy token that may linger in memory.
       answer = answer.split("<<DETAIL_FOLLOWUP>>").join("").trim();
-      await postChunks(say, answer, replyThreadTs);
+      await deliver(say, ack, answer, replyThreadTs);
     } catch (e: any) {
-      await say({ text: `Something went wrong: ${e?.message || e}`, thread_ts: replyThreadTs });
+      const msg = `Something went wrong: ${e?.message || e}`;
+      if (ack?.ts && ack?.channel) {
+        try {
+          await slackWeb.chat.update({ channel: ack.channel, ts: ack.ts, text: msg });
+          return;
+        } catch {
+          /* fall through to posting a new message */
+        }
+      }
+      await say({ text: msg, thread_ts: replyThreadTs });
     }
   }
 
