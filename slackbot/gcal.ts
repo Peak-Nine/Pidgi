@@ -1,26 +1,47 @@
 /**
- * Google Calendar tools for Pidgi (Route B: service account + calendar sharing).
+ * Google Calendar tools for Pidgi.
  *
- * The bot authenticates as a Google service account (no domain-wide delegation).
- * Each team member shares their Google Calendar with the service account's email
- * and grants "Make changes to events". The bot then reads and writes only those
- * shared calendars, addressed by the owner's email as the calendarId.
+ * Two auth modes, OAuth preferred:
+ *   1) OAuth as a real user (recommended). Set GOOGLE_OAUTH_CLIENT_ID,
+ *      GOOGLE_OAUTH_CLIENT_SECRET and GOOGLE_OAUTH_REFRESH_TOKEN (minted once by the
+ *      user via slackbot/get-google-token.mjs). The bot then acts AS that user, so it
+ *      can create events AND send invitations to attendees — no admin / domain-wide
+ *      delegation needed. calendarId "primary" is that user's calendar; colleagues'
+ *      calendars work if shared with them (Workspaces usually expose at least free/busy).
+ *   2) Service account (fallback). Set GOOGLE_SERVICE_ACCOUNT_JSON, with calendars
+ *      shared to the service account. Can create events but CANNOT send attendee
+ *      invitations without domain-wide delegation.
  *
- * Enabled only when GOOGLE_SERVICE_ACCOUNT_JSON is set (the full service-account
- * JSON key, as a single-line string).
+ * Enabled when either mode is configured. OAuth wins if both are present.
  */
 import { google } from "googleapis";
 
 const SCOPES = ["https://www.googleapis.com/auth/calendar"];
 const DEFAULT_TZ = "Europe/Brussels";
 
+function oauthConfigured(): boolean {
+  return !!(
+    process.env.GOOGLE_OAUTH_CLIENT_ID &&
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET &&
+    process.env.GOOGLE_OAUTH_REFRESH_TOKEN
+  );
+}
+
 export function gcalEnabled(): boolean {
-  return !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  return oauthConfigured() || !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
 }
 
 function calendarClient() {
+  if (oauthConfigured()) {
+    const oauth2 = new google.auth.OAuth2(
+      process.env.GOOGLE_OAUTH_CLIENT_ID,
+      process.env.GOOGLE_OAUTH_CLIENT_SECRET
+    );
+    oauth2.setCredentials({ refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN });
+    return google.calendar({ version: "v3", auth: oauth2 });
+  }
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set");
+  if (!raw) throw new Error("No Google auth configured (set GOOGLE_OAUTH_* or GOOGLE_SERVICE_ACCOUNT_JSON)");
   const creds = JSON.parse(raw);
   const auth = new google.auth.JWT({
     email: creds.client_email,
