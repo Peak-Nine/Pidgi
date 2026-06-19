@@ -164,7 +164,8 @@ Do these in order. First present the whole plan (channel name, page location, me
 4. Meetings via gcal_create_event. Before creating any meeting, check the crew's calendars with gcal_list_events and do NOT duplicate a meeting that already exists (e.g. a kickoff already booked); reuse or adjust it instead. Never schedule any meeting overlapping the lunch window 11:45–12:30 Europe/Brussels; choose a slot fully before 11:45 or after 12:30.
    - Crew onboarding: once, in the project's first week, with the WHOLE team, 45 minutes, at the earliest slot that is free for everyone (check each person with gcal_list_events first).
    - Weekly sync: ONLY if the project external_budget is €10,000 or more. 30 min, the project crew only (not the whole studio), as ONE weekly recurring event for the project's duration (use the recurrence field, e.g. ["RRULE:FREQ=WEEKLY;COUNT=N"]). Pick a fixed weekday/time that is free for the crew and outside the lunch window. If under €10k, skip the weekly sync and say why.
-5. Welcome message: draft a short message for the new channel (what the project is, crew and roles, onboarding time and any weekly-sync time, links to the Notion page and the Teamleader project), show it for approval, then post with send_slack_message.
+5. Channel bookmarks: once the channel exists and the Notion page and Agenda are in place, add these channel bookmarks with add_slack_bookmarks: Teamleader (use the URL format https://focus.teamleader.eu/projects/[project_id]/work-breakdown), the Notion project page (its real URL), and the Team Agenda (the Agenda database's URL). Skip any whose link you don't actually have rather than guessing.
+6. Welcome message: draft a short message for the new channel (what the project is, crew and roles, onboarding time and any weekly-sync time, links to the Notion page and the Teamleader project), show it for approval, then post with send_slack_message.
 
 Accuracy:
 - Never invent numbers, IDs, dates or names. If unsure, say so. If a tool returns nothing,
@@ -273,9 +274,22 @@ async function main(): Promise<void> {
         },
         required: ["channel", "text"],
       },
+    } as any,
+    {
+      name: "add_slack_bookmarks",
+      description:
+        "Add one or more link bookmarks to a Slack channel (e.g. after creating a project channel, pin the Teamleader project, the Notion page and the Team Agenda). Provide the channel ID and a list of {title, link, emoji?}. Requires the bot to have bookmarks:write.",
+      input_schema: {
+        type: "object",
+        properties: {
+          channel: { type: "string", description: "Channel ID" },
+          bookmarks: { type: "array", description: "[{title, link, emoji?}]", items: { type: "object" } },
+        },
+        required: ["channel", "bookmarks"],
+      },
     } as any
   );
-  console.log("Slack admin tools enabled (create_slack_channel, send_slack_message).");
+  console.log("Slack admin tools enabled (find/create channel, send message, add bookmarks).");
 
   // Assigned once the Bolt app is built (see below); used by the Slack admin tools.
   let slackWeb: any = null;
@@ -346,6 +360,31 @@ async function main(): Promise<void> {
         return { isError: false, text: JSON.stringify({ ok: r?.ok, ts: r?.ts, channel: r?.channel }) };
       } catch (e: any) {
         return { isError: true, text: `send_slack_message failed: ${e?.data?.error || e?.message || e}` };
+      }
+    }
+    if (name === "add_slack_bookmarks") {
+      try {
+        const channel = String(input.channel);
+        const list = Array.isArray(input.bookmarks) ? input.bookmarks : [];
+        const added: any[] = [];
+        for (const b of list) {
+          if (!b?.link) continue;
+          try {
+            const r: any = await slackWeb.bookmarks.add({
+              channel_id: channel,
+              title: String(b.title || b.link),
+              type: "link",
+              link: String(b.link),
+              ...(b.emoji ? { emoji: String(b.emoji) } : {}),
+            });
+            added.push({ title: b.title, ok: r?.ok !== false });
+          } catch (e: any) {
+            added.push({ title: b.title, error: e?.data?.error || String(e) });
+          }
+        }
+        return { isError: false, text: JSON.stringify({ added }) };
+      } catch (e: any) {
+        return { isError: true, text: `add_slack_bookmarks failed: ${e?.data?.error || e?.message || e}` };
       }
     }
     try {
