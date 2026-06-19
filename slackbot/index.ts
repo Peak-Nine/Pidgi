@@ -406,16 +406,42 @@ async function main(): Promise<void> {
   const threadHistory = new Map<string, Anthropic.MessageParam[]>();
   const HISTORY_MAX = 20; // keep the last ~10 exchanges per conversation
 
-  async function ask(userText: string, slackUserId: string, convoKey: string): Promise<string> {
+  // Map the asking Slack user to their name + email so "my agenda/calendar" resolves
+  // without Pidgi asking who they are. Needs the bot to have users:read + users:read.email.
+  const identityCache = new Map<string, { name: string; email: string }>();
+  async function resolveIdentity(userId: string): Promise<{ name: string; email: string } | null> {
+    if (!userId || !slackWeb) return null;
+    if (identityCache.has(userId)) return identityCache.get(userId)!;
+    try {
+      const r: any = await slackWeb.users.info({ user: userId });
+      const p = r?.user?.profile || {};
+      const id = { name: r?.user?.real_name || p.real_name || p.display_name || "", email: p.email || "" };
+      identityCache.set(userId, id);
+      return id;
+    } catch {
+      return null;
+    }
+  }
+
+  async function ask(
+    userText: string,
+    slackUserId: string,
+    convoKey: string,
+    identity?: { name: string; email: string } | null
+  ): Promise<string> {
     const history = threadHistory.get(convoKey) ?? [];
     const messages: Anthropic.MessageParam[] = [...history, { role: "user", content: userText }];
+    const system =
+      identity && (identity.email || identity.name)
+        ? `${SYSTEM_PROMPT}\n\nWho you are talking to right now: ${identity.name || "a Peak Nine teammate"}${identity.email ? ` (${identity.email})` : ""}. When they say "me", "my", "my agenda" or "my calendar", that means THIS person and THIS email — use their email directly as calendar_email for the gcal_* tools (and as the person for "my" tasks) without asking which calendar, unless they explicitly name someone else.`
+        : SYSTEM_PROMPT;
 
     let finalText = "";
     for (let step = 0; step < 16; step++) {
       const resp = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 8000,
-        system: SYSTEM_PROMPT,
+        system,
         tools: anthropicTools as any,
         messages,
       });
@@ -557,7 +583,8 @@ async function main(): Promise<void> {
       return;
     }
     try {
-      let answer = await ask(cleaned, slackUserId, convoKey);
+      const identity = await resolveIdentity(slackUserId);
+      let answer = await ask(cleaned, slackUserId, convoKey, identity);
       // Defensive: strip any stray legacy token that may linger in memory.
       answer = answer.split("<<DETAIL_FOLLOWUP>>").join("").trim();
       await postChunks(say, answer, replyThreadTs);
