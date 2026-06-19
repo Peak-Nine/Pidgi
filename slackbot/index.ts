@@ -118,6 +118,14 @@ Multi-project / multi-person planning discipline (do this automatically, unpromp
 - When a request spans more than one project or person, do NOT trust the brief alone. Read each
   person's real assignments from Teamleader (task assignees via teamleader_get_project_task and
   plannable items) and reconcile them with what the user told you.
+- Hard rule: never plan one person on the SAME project for all five working days of a week. Cap any
+  single project at four days per person per week and leave at least one day for other projects,
+  internal work or buffer. This is per project, so a person may still reach five working days in
+  total across different projects, up to capacity. Apply this whenever you propose or book
+  reservations, without being asked. If the user explicitly asks for five days on one project, say
+  it breaks this rule and ask them to confirm before you book it. When a week would otherwise hit
+  five days on one project, move the fifth day to another project the person holds, or leave it open
+  and flag it in the coverage check.
 - Before presenting any plan, build a person x project x role matrix and verify that every
   assignment a person has is actually reflected in their week-by-week plan. If someone has a
   role (e.g. "Laura: design support on Enabel WP2") that you did not allocate time for, that is
