@@ -366,6 +366,9 @@ export async function handleNotionTool(name: string, input: any): Promise<{ text
 
     return { text: `Unknown Notion tool: ${name}`, isError: true };
   } catch (e: any) {
-    return { text: `Notion error in ${name}: ${e?.message || e}`, isError: true };
+    // Surface the real cause both to the model and to the Render logs.
+    const detail = [e?.name, e?.code, e?.status, e?.message].filter(Boolean).join(" | ");
+    console.error(`[notion] ${name} failed: ${detail || e}`, e?.body ? JSON.stringify(e.body) : "");
+    return { text: `Notion error in ${name}: ${detail || e}`, isError: true };
   }
 }
