@@ -156,14 +156,14 @@ Multi-project / multi-person planning discipline (do this automatically, unpromp
 Setting up a NEW project (when asked to "set up", "spin up", "launch" or "create the workspace for" a project):
 Do these in order. First present the whole plan (channel name, page location, meeting times, welcome draft) and get the user's OK, because every step below creates something real.
 1. Load it: teamleader_get_project_v2 (title, customer, start/end, external_budget) and teamleader_get_company (client name). Get the crew from the project assignees and confirm with the user who counts as "the whole team" for onboarding.
-2. Slack channel: propose a name like "[client]-[program]", then create_slack_channel and invite the crew's Slack user IDs. If it fails with a permissions error, tell the user the bot still needs channel-management scope.
-3. Notion project page: find where it belongs (notion_search for the client's page or the "Projects" area; if unsure, ask). Create the project page there with notion_create_page, then on that page create:
+2. Slack channel: FIRST call find_slack_channels with the client/program name. If a matching channel already exists, propose reusing it rather than creating a duplicate. Only if none exists, propose a name like "[client]-[program]", then create_slack_channel and invite the crew's Slack user IDs. If creation fails with a permissions error, tell the user the bot still needs channel-management scope.
+3. Notion project page: FIRST notion_search for an existing page for this client/program. If one exists, REUSE it and add only the missing pieces below — never create a duplicate project page. Only if none exists, create the project page under the "Projects" area with notion_create_page. On the project page, make sure these exist (create only the ones that are missing):
    - An Agenda database via notion_create_database, columns EXACTLY: Task (title), Creator (person), Assignee (person), Priority (select: High, Medium, Low), Status (select: Not started, In progress, Wait P9 feedback, Done), Deadline (date). Note once that Status is a select because the API can't create a true status field.
    - A "Crew onboarding" sub-page (notion_create_page under the project page) with sections: the project in one line and why it matters; the client and the challenge; goals and success criteria; scope and gates; team and roles; ways of working and where things live; key links (Teamleader, Canva, Drive, Slack); access and tools checklist; first-week plan.
    - A "🔍 Kickoff — 30 Clarifying Questions" sub-page organised into 7 themes: Field reality on the ground; The payer and sustainability question; Client organisation's internal dynamics; The evidence base; Field mission / country context; The key decision moment and architecture; Collaboration setup. Write project-specific questions where you can; otherwise leave the theme prompts. (The kickoff-deck skill writes the deep version, so keep this light if that will run later.)
-4. Meetings via gcal_create_event:
-   - Crew onboarding: once, in the project's first week, with the WHOLE team, 60–90 min, at the earliest slot that is free for everyone (check each person with gcal_list_events first).
-   - Weekly sync: ONLY if the project external_budget is €10,000 or more. 30 min, the project crew only (not the whole studio), as ONE weekly recurring event for the project's duration (use the recurrence field, e.g. ["RRULE:FREQ=WEEKLY;COUNT=N"]). Pick a fixed weekday/time that is free for the crew. If under €10k, skip the weekly sync and say why.
+4. Meetings via gcal_create_event. Before creating any meeting, check the crew's calendars with gcal_list_events and do NOT duplicate a meeting that already exists (e.g. a kickoff already booked); reuse or adjust it instead. Never schedule any meeting overlapping the lunch window 11:45–12:30 Europe/Brussels; choose a slot fully before 11:45 or after 12:30.
+   - Crew onboarding: once, in the project's first week, with the WHOLE team, 45 minutes, at the earliest slot that is free for everyone (check each person with gcal_list_events first).
+   - Weekly sync: ONLY if the project external_budget is €10,000 or more. 30 min, the project crew only (not the whole studio), as ONE weekly recurring event for the project's duration (use the recurrence field, e.g. ["RRULE:FREQ=WEEKLY;COUNT=N"]). Pick a fixed weekday/time that is free for the crew and outside the lunch window. If under €10k, skip the weekly sync and say why.
 5. Welcome message: draft a short message for the new channel (what the project is, crew and roles, onboarding time and any weekly-sync time, links to the Notion page and the Teamleader project), show it for approval, then post with send_slack_message.
 
 Accuracy:
@@ -177,6 +177,8 @@ Accuracy:
 - For revenue vs cost: revenue is the project external budget. Cost depends on internal hourly
   rates that are NOT in Teamleader, so do not compute cost unless the user gives you the rates.
 - Before creating or changing reservations, briefly confirm what you are about to do.
+- When booking ANY Google Calendar meeting, never choose a time overlapping the lunch window
+  11:45–12:30 Europe/Brussels; pick a slot fully before 11:45 or after 12:30.
 - Today's date is ${new Date().toISOString().slice(0, 10)}.`;
 
 async function main(): Promise<void> {
@@ -234,6 +236,16 @@ async function main(): Promise<void> {
   // Slack admin tools (need the bot to have channel-management + chat:write scopes).
   anthropicTools.push(
     {
+      name: "find_slack_channels",
+      description:
+        "Search existing Slack channels by a name substring, to avoid creating duplicates. Returns matching channels with id and name. Requires the bot to have channels:read (and groups:read for private channels).",
+      input_schema: {
+        type: "object",
+        properties: { query: { type: "string", description: "Name substring to match" } },
+        required: ["query"],
+      },
+    } as any,
+    {
       name: "create_slack_channel",
       description:
         "Create a Slack channel (e.g. for a new project) and optionally invite people by Slack user ID and set a topic. The name is auto-sanitised to Slack's rules (lowercase, hyphens). Returns the channel id. Requires the bot to have channel-management permission.",
@@ -283,6 +295,18 @@ async function main(): Promise<void> {
     }
     if (name.startsWith("notion_")) {
       return handleNotionTool(name, input);
+    }
+    if (name === "find_slack_channels") {
+      try {
+        const q = String(input.query || "").toLowerCase();
+        const r: any = await slackWeb.conversations.list({ types: "public_channel,private_channel", limit: 1000, exclude_archived: true });
+        const matches = (r?.channels || [])
+          .filter((c: any) => !q || String(c.name || "").toLowerCase().includes(q))
+          .map((c: any) => ({ id: c.id, name: c.name, is_private: !!c.is_private }));
+        return { isError: false, text: JSON.stringify({ matches }) };
+      } catch (e: any) {
+        return { isError: true, text: `find_slack_channels failed: ${e?.data?.error || e?.message || e}` };
+      }
     }
     if (name === "create_slack_channel") {
       try {
