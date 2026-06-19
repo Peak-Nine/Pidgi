@@ -52,7 +52,31 @@ export function notionEnabled(): boolean {
 function notionClient(): Client {
   const auth = process.env.NOTION_TOKEN;
   if (!auth) throw new Error("NOTION_TOKEN is not set");
-  return new Client({ auth, notionVersion: NOTION_VERSION });
+  // Force the platform's undici-based fetch instead of the SDK's bundled node-fetch,
+  // which was throwing ERR_STREAM_PREMATURE_CLOSE on Render (dead keep-alive sockets).
+  return new Client({
+    auth,
+    notionVersion: NOTION_VERSION,
+    fetch: (url: any, init: any) => (globalThis as any).fetch(url, init),
+  } as any);
+}
+
+// Retry transient network drops (premature close, reset sockets). READ-ONLY use only,
+// never wrap writes — a premature close can still have created the object server-side.
+async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  let last: any;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      last = e;
+      const msg = `${e?.code || ""} ${e?.name || ""} ${e?.message || ""}`;
+      const retryable = /PREMATURE_CLOSE|ECONNRESET|ETIMEDOUT|EPIPE|socket hang up|fetch failed|Premature close|FetchError/i.test(msg);
+      if (!retryable || i === tries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 300 * (i + 1)));
+    }
+  }
+  throw last;
 }
 
 // Pull a human-readable title from a page, database, or DB-row object.
@@ -255,11 +279,11 @@ export async function handleNotionTool(name: string, input: any): Promise<{ text
     const c = notionClient();
 
     if (name === "notion_search") {
-      const res: any = await c.search({
+      const res: any = await withRetry(() => c.search({
         query: input.query,
         filter: input.object_type ? { property: "object", value: input.object_type } : undefined,
         page_size: input.page_size || 25,
-      });
+      }));
       const items = (res.results || []).map((r: any) => ({
         id: r.id,
         object: r.object,
@@ -270,8 +294,8 @@ export async function handleNotionTool(name: string, input: any): Promise<{ text
     }
 
     if (name === "notion_get_page") {
-      const page: any = await c.pages.retrieve({ page_id: input.page_id });
-      const blocks: any = await c.blocks.children.list({ block_id: input.page_id, page_size: 100 });
+      const page: any = await withRetry(() => c.pages.retrieve({ page_id: input.page_id }));
+      const blocks: any = await withRetry(() => c.blocks.children.list({ block_id: input.page_id, page_size: 100 }));
       const out = {
         id: page.id,
         title: titleOf(page),
@@ -284,12 +308,12 @@ export async function handleNotionTool(name: string, input: any): Promise<{ text
     }
 
     if (name === "notion_query_database") {
-      const res: any = await c.databases.query({
+      const res: any = await withRetry(() => c.databases.query({
         database_id: input.database_id,
         filter: input.filter,
         sorts: input.sorts,
         page_size: input.page_size || 25,
-      });
+      }));
       const rows = (res.results || []).map((r: any) => ({
         id: r.id,
         title: titleOf(r),
