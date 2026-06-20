@@ -225,8 +225,12 @@ Dates and weekdays:
 Empty results and "none":
 - Never conclude "zero", "none" or "confirmed" from a single empty query. Re-check with a wider date
   window and a second method, and say "I couldn't retrieve X" rather than "X has none" when unsure.
-- To find a person's reservations on a project, list the project's plannable items and the
-  reservations on those items, then filter by person. Do NOT rely on one assignee-filtered search.
+- For anything about a project's planned time ("what's planned on X", "who works on what on X",
+  before deleting/replanning a project), use get_project_reservations(project_id). It scopes,
+  resolves task names and labels the project in code, so it cannot pull or mislabel another
+  project's reservations. NEVER answer a project-planning question by listing reservations by person
+  and guessing which belong to the project — that is the mistake that put Allez Circulez blocks
+  under Co-Health.
 - Always do this re-check before proposing to delete anything.
 
 Anchoring and trust (the studio's honest-over-confident rule):
@@ -309,6 +313,24 @@ async function main(): Promise<void> {
     },
   } as any);
   console.log("Date tool enabled.");
+
+  // Project-scoped reservations, resolved and labelled in code so the model can't pull
+  // or mislabel another project's planning.
+  anthropicTools.push({
+    name: "get_project_reservations",
+    description:
+      "Get ALL planned reservations for ONE project, correctly scoped and labelled. Pass project_id (and optional start_date/end_date). Returns each reservation with date, weekday, hours, assignee name, the real task title, the project name, and an out_of_range flag. Use THIS for any 'what's planned on project X' or 'who works on what on project X' question, instead of listing reservations by person — it only ever returns THIS project's reservations, so it cannot pull or mislabel another project's data.",
+    input_schema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "Teamleader project id" },
+        start_date: { type: "string", description: "Optional window start (YYYY-MM-DD)" },
+        end_date: { type: "string", description: "Optional window end (YYYY-MM-DD)" },
+      },
+      required: ["project_id"],
+    },
+  } as any);
+  console.log("Project-reservations tool enabled.");
 
   // Slack admin tools (need the bot to have channel-management + chat:write scopes).
   anthropicTools.push(
@@ -450,6 +472,61 @@ async function main(): Promise<void> {
         }
       }
       return { text: JSON.stringify(out), isError: false };
+    }
+    if (name === "get_project_reservations") {
+      try {
+        const projectId = String(input.project_id || "");
+        if (!projectId) return { isError: true, text: "get_project_reservations needs project_id." };
+        const tl = async (t: string, a: any): Promise<any> => {
+          const r: any = await mcp.callTool({ name: "teamleader_" + t, arguments: a || {} });
+          const txt = Array.isArray(r?.content) ? r.content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("") : "";
+          try { return JSON.parse(txt); } catch { return {}; }
+        };
+        const proj = await tl("get_project_v2", { id: projectId });
+        const projectTitle = proj?.data?.title || projectId;
+        const today = new Date().toISOString().slice(0, 10);
+        const plus = new Date(Date.now() + 180 * 86400000).toISOString().slice(0, 10);
+        const start = input.start_date || proj?.data?.start_date || today;
+        const end = input.end_date || proj?.data?.end_date || plus;
+        const itemsR = await tl("list_plannable_items", { project_ids: [projectId], page_size: 100 });
+        const itemIds = (itemsR.data || []).map((i: any) => i.id);
+        if (!itemIds.length) {
+          return { isError: false, text: JSON.stringify({ project: projectTitle, project_id: projectId, count: 0, reservations: [], note: "This project has no plannable items, so no reservations are scoped to it." }) };
+        }
+        const reservations: any[] = [];
+        for (let page = 1; page <= 20; page++) {
+          const r = await tl("list_reservations", { plannable_item_ids: itemIds, start_date: start, end_date: end, page, page_size: 100 });
+          const batch = r.data || [];
+          reservations.push(...batch);
+          if (batch.length < 100) break;
+        }
+        const usersR = await tl("list_users", { page_size: 100 });
+        const userName: Record<string, string> = {};
+        (usersR.data || []).forEach((u: any) => { userName[u.id] = (u.first_name || "").trim() || u.email || u.id; });
+        const taskIds = Array.from(new Set(reservations.filter((r) => r.source?.type === "task" && r.source?.id).map((r) => r.source.id)));
+        const taskTitle: Record<string, string> = {};
+        for (let i = 0; i < taskIds.length; i += 8) {
+          const chunk = taskIds.slice(i, i + 8) as string[];
+          await Promise.all(chunk.map(async (id) => {
+            try { const t = await tl("get_task", { id }); taskTitle[id] = t?.data?.title || "(task)"; } catch { taskTitle[id] = "(task)"; }
+          }));
+        }
+        const rows = reservations.map((r) => {
+          const tid = r.source?.id;
+          return {
+            date: r.date,
+            weekday: weekdayOf(r.date),
+            hours: (r.duration?.value || 0) / 60,
+            assignee: userName[r.assignee?.id] || r.assignee?.id || null,
+            task: (tid && taskTitle[tid]) || "(task)",
+            project: projectTitle,
+            out_of_range: !!(r.date_range_status && r.date_range_status !== "within_range"),
+          };
+        });
+        return { isError: false, text: JSON.stringify({ project: projectTitle, project_id: projectId, window: { start, end }, count: rows.length, reservations: rows }, null, 2) };
+      } catch (e: any) {
+        return { isError: true, text: `get_project_reservations failed: ${e?.message || e}` };
+      }
     }
     if (name.startsWith("gcal_")) {
       return handleGcalTool(name, input);
