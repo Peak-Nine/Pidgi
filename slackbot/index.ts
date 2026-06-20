@@ -56,6 +56,13 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
+// Reliable weekday lookup (parsed at UTC noon to avoid timezone off-by-one).
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function weekdayOf(iso: string): string {
+  const d = new Date(String(iso).slice(0, 10) + "T12:00:00Z");
+  return isNaN(d.getTime()) ? "?" : WEEKDAYS[d.getUTCDay()];
+}
+
 const MODEL = process.env.BOT_MODEL || "claude-sonnet-4-6";
 const PORT = Number(process.env.PORT) || 3000;
 const WRITE_ALLOWLIST = (process.env.SLACK_WRITE_ALLOWLIST || "")
@@ -208,6 +215,31 @@ Accuracy:
   attendees (their email addresses). Never create a team meeting with an empty attendee list.
 - When booking ANY Google Calendar meeting, never choose a time overlapping the lunch window
   11:45–12:30 Europe/Brussels; pick a slot fully before 11:45 or after 12:30.
+
+Dates and weekdays:
+- Never state a weekday for a date, or decide which day of the week something lands on, from your
+  own reasoning — you get this wrong. Call date_info. Before booking on a specific day, confirm with
+  date_info that it is a weekday (not Sat/Sun) and the exact day you mean. Build week-by-week plans
+  from date_info's working_days, never from mental arithmetic.
+
+Empty results and "none":
+- Never conclude "zero", "none" or "confirmed" from a single empty query. Re-check with a wider date
+  window and a second method, and say "I couldn't retrieve X" rather than "X has none" when unsure.
+- To find a person's reservations on a project, list the project's plannable items and the
+  reservations on those items, then filter by person. Do NOT rely on one assignee-filtered search.
+- Always do this re-check before proposing to delete anything.
+
+Anchoring and trust (the studio's honest-over-confident rule):
+- Every reservation or capacity number you show must carry its real task name (via teamleader_get_task)
+  and state plainly whether it is Teamleader Planning or Google Calendar — they are different and must
+  not be conflated.
+- If a reservation looks stale or mis-tagged (e.g. booked on a day that clearly belongs to another
+  project), flag it to the user instead of silently planning around it.
+- Present derived numbers as derived and show the rows they come from. When you correct an earlier
+  statement, show the raw data behind the new figure rather than just asserting a new number. A
+  flagged unknown beats a confident wrong answer.
+- Before any deletion, list each exact item (date + task name + that it is a planning reservation)
+  and wait for an explicit go.
 - Today's date is ${new Date().toISOString().slice(0, 10)}.`;
 
 async function main(): Promise<void> {
@@ -261,6 +293,22 @@ async function main(): Promise<void> {
     } as any);
     console.log("Dashboard link tool enabled.");
   }
+
+  // Date helper so the model never guesses weekdays.
+  anthropicTools.push({
+    name: "date_info",
+    description:
+      "Resolve dates to weekdays so you NEVER guess. Pass `dates` (ISO YYYY-MM-DD) to get each one's weekday, and/or `start`+`end` to get every day in the range plus just the working days (Mon-Fri). ALWAYS call this before you state a weekday for a date, build a week-by-week plan, or book anything on a specific day — language models miscompute weekdays and have booked work on weekends as a result.",
+    input_schema: {
+      type: "object",
+      properties: {
+        dates: { type: "array", items: { type: "string" }, description: "ISO dates (YYYY-MM-DD)" },
+        start: { type: "string", description: "Range start (YYYY-MM-DD)" },
+        end: { type: "string", description: "Range end (YYYY-MM-DD)" },
+      },
+    },
+  } as any);
+  console.log("Date tool enabled.");
 
   // Slack admin tools (need the bot to have channel-management + chat:write scopes).
   anthropicTools.push(
@@ -378,6 +426,30 @@ async function main(): Promise<void> {
     }
     if (name === "get_dashboard_link") {
       return { text: dashboardLink(), isError: false };
+    }
+    if (name === "date_info") {
+      const out: any = {};
+      const dates = Array.isArray(input.dates) ? input.dates : [];
+      out.dates = dates.map((x: string) => {
+        const wd = weekdayOf(x);
+        return { date: String(x).slice(0, 10), weekday: wd, is_weekend: wd === "Saturday" || wd === "Sunday" };
+      });
+      if (input.start && input.end) {
+        const start = new Date(String(input.start).slice(0, 10) + "T12:00:00Z");
+        const end = new Date(String(input.end).slice(0, 10) + "T12:00:00Z");
+        const working: any[] = [];
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && end >= start && (end.getTime() - start.getTime()) / 86400000 <= 400) {
+          for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
+            const d = new Date(t);
+            const wd = WEEKDAYS[d.getUTCDay()];
+            if (wd !== "Saturday" && wd !== "Sunday") working.push({ date: d.toISOString().slice(0, 10), weekday: wd });
+          }
+          out.working_days = working;
+        } else {
+          out.range_error = "Provide a valid start/end within ~400 days.";
+        }
+      }
+      return { text: JSON.stringify(out), isError: false };
     }
     if (name.startsWith("gcal_")) {
       return handleGcalTool(name, input);
