@@ -182,6 +182,67 @@ export async function gatherDashboardData(mcp: any, startISO: string | undefined
   };
 }
 
+/**
+ * Per-project finance: budget sold, hours (estimated/planned/tracked), and planned hours
+ * per person (so the client can apply per-person rates to compute cost, margin and health).
+ * Loaded on demand by the Project finance tab.
+ */
+export async function gatherFinanceData(mcp: any): Promise<any> {
+  const usersR = await tl(mcp, "list_users", { page_size: 100 });
+  const userName: Record<string, string> = {};
+  const users: { id: string; name: string }[] = [];
+  (usersR.data || []).forEach((u: any) => {
+    const n = (u.first_name || "").trim() || u.email || u.id;
+    userName[u.id] = n;
+    users.push({ id: u.id, name: n });
+  });
+
+  const projR = await tl(mcp, "list_projects_v2", { status: "open", page_size: 100 });
+  const projects: any[] = [];
+  for (const p of projR.data || []) {
+    const budget = num(p.external_budget?.amount) || num(p.price?.amount) || 0;
+    const itemsR = await tl(mcp, "list_plannable_items", { project_ids: [p.id], page_size: 100 });
+    const itemIds = (itemsR.data || []).map((i: any) => i.id);
+    const perPersonHours: Record<string, number> = {};
+    if (itemIds.length) {
+      const start = p.start_date || "2026-01-01";
+      const end = p.end_date || "2027-12-31";
+      for (let page = 1; page <= 25; page++) {
+        const r = await tl(mcp, "list_reservations", { plannable_item_ids: itemIds, start_date: start, end_date: end, page, page_size: 100 });
+        const batch = r.data || [];
+        for (const rv of batch) {
+          const uid = rv.assignee?.id;
+          if (!uid) continue;
+          perPersonHours[uid] = (perPersonHours[uid] || 0) + num(rv.duration?.value) / 60;
+        }
+        if (batch.length < 100) break;
+      }
+    }
+    const perPerson = Object.keys(perPersonHours).map((uid) => ({
+      userId: uid,
+      name: userName[uid] || uid,
+      plannedHours: Math.round(perPersonHours[uid] * 10) / 10,
+    }));
+    const plannedHours = perPerson.reduce((s, x) => s + x.plannedHours, 0);
+    projects.push({
+      id: p.id,
+      title: p.title,
+      color: p.color || "#C0C0C4",
+      budget,
+      spent: num(p.external_budget_spent?.amount),
+      remaining: num(p.external_budget_remaining?.amount),
+      estimatedHours: Math.round((num(p.time_estimated?.value) / 3600) * 10) / 10,
+      trackedHours: Math.round((num(p.time_tracked?.value) / 3600) * 10) / 10,
+      plannedHours: Math.round(plannedHours * 10) / 10,
+      tlCost: p.cost?.amount != null ? num(p.cost.amount) : null,
+      tlMarginPct: typeof p.margin_percentage === "number" ? p.margin_percentage : null,
+      perPerson,
+    });
+  }
+  projects.sort((a, b) => (b.budget || 0) - (a.budget || 0));
+  return { generatedAt: new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC", users, projects };
+}
+
 /** The static HTML shell + client JS. No server data is interpolated here. */
 export function renderShell(): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -229,10 +290,25 @@ td.day{text-align:left;vertical-align:top;min-width:120px;white-space:normal;pad
 #drill .x{position:absolute;top:8px;right:11px;cursor:pointer;color:#8a897f;font-size:16px}
 #drill .row{font-size:12.5px;padding:4px 0;border-top:1px solid #efede6}
 #msg{color:#6b6a64;font-size:13px;padding:14px}
+.tabs{display:flex;gap:6px;margin:0 0 16px;border-bottom:1px solid #e7e5dd}
+.tab{border:0;background:none;font-size:14px;padding:8px 14px;cursor:pointer;color:#6b6a64;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:#1f1e1b;font-weight:600;border-bottom-color:#1f1e1b}
+#rates td,#rates th{text-align:left}
+#rates input{width:90px;padding:4px 6px;border:1px solid #d9d7cd;border-radius:6px;font-size:13px;text-align:right}
+td.fin-name{text-align:left;font-weight:600;min-width:200px}
+.health{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.est{color:#8a897f;font-size:11px}
+.note{color:#8a897f;font-size:11px;margin:8px 2px 0}
 </style></head><body><div class="wrap">
 <h1>Dashbird 🐦</h1>
 <p class="sub" id="sub">Live from Teamleader. Capacity reflects Teamleader planning only (excludes Google Calendar).</p>
 
+<div class="tabs">
+  <button id="tab-plan" class="tab on">Planning</button>
+  <button id="tab-fin" class="tab">Project finance</button>
+</div>
+
+<div id="pane-plan">
 <div class="controls">
   <span><label>Window</label><select id="weeks">
     <option value="2">2 weeks</option><option value="4">4 weeks</option>
@@ -256,6 +332,24 @@ td.day{text-align:left;vertical-align:top;min-width:120px;white-space:normal;pad
 
   <h2>Who works on what — day by day</h2>
   <div class="scroll"><table id="grid"></table></div>
+</div>
+</div>
+
+<div id="pane-fin" style="display:none">
+  <div id="msg-fin">Loading finance…</div>
+  <div id="fin-body" style="display:none">
+    <h2>Per-person hourly cost (€/h)</h2>
+    <p class="note">Rates are stored only in your browser, never on the server. Edit them and the figures below recalculate live.</p>
+    <div class="scroll"><table id="rates"></table></div>
+    <h2>Project financial health</h2>
+    <div class="scroll"><table id="fin"></table></div>
+    <div class="legend">
+      <span><i class="health" style="background:#3aa76d"></i>healthy (cost &le; 60% of budget)</span>
+      <span><i class="health" style="background:#e0a82e"></i>watch (60–85%)</span>
+      <span><i class="health" style="background:#d1453b"></i>at risk (&gt;85% or over)</span>
+    </div>
+    <p class="note">Cost = each person's planned (booked) hours × their rate. Budget, hours and any Teamleader margin are live from Teamleader; the cost and margin shown here are computed from your rates.</p>
+  </div>
 </div>
 
 <div id="drill"><span class="x" onclick="document.getElementById('drill').style.display='none'">×</span><div id="drillbody"></div></div>
@@ -366,6 +460,79 @@ td.day{text-align:left;vertical-align:top;min-width:120px;white-space:normal;pad
   }
 
   function renderAll(){ renderCap(); renderGrid(); }
+
+  // ---- Project finance tab ----
+  var fin = { data: null, loaded: false, rates: {} };
+  try { fin.rates = JSON.parse(localStorage.getItem('dashbird_rates') || '{}') || {}; } catch(e) { fin.rates = {}; }
+  function saveRates(){ try { localStorage.setItem('dashbird_rates', JSON.stringify(fin.rates)); } catch(e){} }
+  function eur(n){ return '€' + Math.round(n).toLocaleString('en-IE'); }
+  function healthColor(ratio){ if(ratio<=0.6) return '#3aa76d'; if(ratio<=0.85) return '#e0a82e'; return '#d1453b'; }
+
+  function renderRates(){
+    var us = (fin.data.users||[]).slice().sort(function(a,b){ return a.name<b.name?-1:1; });
+    var h='<thead><tr><th>Person</th><th>€/hour</th></tr></thead><tbody>';
+    us.forEach(function(u){
+      var v = fin.rates[u.id]!=null ? fin.rates[u.id] : '';
+      h+='<tr><td>'+esc(u.name)+'</td><td><input type="number" min="0" step="5" data-uid="'+esc(u.id)+'" value="'+esc(v)+'" placeholder="0"></td></tr>';
+    });
+    h+='</tbody>'; $('rates').innerHTML=h;
+    var inputs=$('rates').querySelectorAll('input');
+    for(var i=0;i<inputs.length;i++){
+      inputs[i].addEventListener('input', function(e){
+        var uid=e.target.getAttribute('data-uid'); var val=parseFloat(e.target.value);
+        fin.rates[uid]= isNaN(val)?0:val; saveRates(); renderFin();
+      });
+    }
+  }
+
+  function renderFin(){
+    var ps = fin.data.projects||[];
+    var h='<thead><tr><th class="fin-name">Project</th><th class="r">Budget sold</th><th class="r">Est h</th><th class="r">Planned h</th><th class="r">Tracked h</th><th class="r">Planned cost</th><th class="r">Margin</th><th class="r">Margin %</th><th>Health</th></tr></thead><tbody>';
+    if(!ps.length){ h+='<tr><td class="fin-name">—</td><td colspan="8">no open projects</td></tr>'; }
+    ps.forEach(function(p){
+      var cost=0, allRated=true, anyHours=false;
+      (p.perPerson||[]).forEach(function(pp){
+        if((pp.plannedHours||0)>0){ anyHours=true; var rate=fin.rates[pp.userId]; if(rate==null||rate===0) allRated=false; cost += (pp.plannedHours||0)*(rate||0); }
+      });
+      var budget=p.budget||0;
+      var margin=budget-cost;
+      var marginPct = budget>0 ? Math.round((margin/budget)*100) : null;
+      var ratio = budget>0 ? cost/budget : (cost>0?1.5:0);
+      var costCell = cost>0 ? eur(cost)+(allRated?'':' <span class="est" title="Some people on this project have no rate set yet">*</span>') : (anyHours?'<span class="est">set rates</span>':'—');
+      h+='<tr>'
+        +'<td class="fin-name"><span class="dot" style="background:'+esc(p.color)+'"></span>'+esc(p.title)+'</td>'
+        +'<td class="r">'+(budget?eur(budget):'—')+'</td>'
+        +'<td class="r">'+(p.estimatedHours||0)+'</td>'
+        +'<td class="r">'+(p.plannedHours||0)+'</td>'
+        +'<td class="r">'+(p.trackedHours||0)+'</td>'
+        +'<td class="r">'+costCell+'</td>'
+        +'<td class="r">'+(cost>0?eur(margin):'—')+'</td>'
+        +'<td class="r">'+(cost>0&&marginPct!=null?marginPct+'%':'—')+'</td>'
+        +'<td>'+(cost>0?'<span class="health" style="background:'+healthColor(ratio)+'"></span>':'')+'</td>'
+        +'</tr>';
+    });
+    h+='</tbody>'; $('fin').innerHTML=h;
+  }
+
+  function loadFinance(){
+    if(fin.loaded) return;
+    fin.loaded=true;
+    fetch('/dashboard/finance?key='+encodeURIComponent(KEY))
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(d){ fin.data=d; $('msg-fin').style.display='none'; $('fin-body').style.display='block'; renderRates(); renderFin(); })
+      .catch(function(e){ fin.loaded=false; $('msg-fin').textContent='Could not load finance: '+e.message; });
+  }
+
+  function showTab(which){
+    var plan = which==='plan';
+    $('pane-plan').style.display = plan?'block':'none';
+    $('pane-fin').style.display = plan?'none':'block';
+    $('tab-plan').classList.toggle('on', plan);
+    $('tab-fin').classList.toggle('on', !plan);
+    if(!plan) loadFinance();
+  }
+  $('tab-plan').addEventListener('click', function(){ showTab('plan'); });
+  $('tab-fin').addEventListener('click', function(){ showTab('fin'); });
 
   function load(){
     $('msg').style.display='block'; $('msg').textContent='Loading live data…'; $('content').style.display='none';

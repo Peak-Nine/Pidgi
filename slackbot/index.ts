@@ -38,7 +38,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { gcalEnabled, gcalToolDefs, handleGcalTool } from "./gcal.js";
 import { notionEnabled, notionToolDefs, handleNotionTool } from "./notion.js";
-import { renderShell, gatherDashboardData, dashboardLink } from "./dashboard.js";
+import { renderShell, gatherDashboardData, gatherFinanceData, dashboardLink } from "./dashboard.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -847,6 +847,18 @@ async function main(): Promise<void> {
       const weeks = Number(req.query.weeks) || 6;
       const start = typeof req.query.start === "string" ? req.query.start : undefined;
       const data = await gatherDashboardData(mcp, start, weeks);
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  // Per-project finance for the Project finance tab (loaded on demand).
+  receiver.router.get("/dashboard/finance", async (req: any, res: any) => {
+    if (!dashKeyOk(req, res)) return;
+    try {
+      const data = await gatherFinanceData(mcp);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.json(data);
     } catch (e: any) {
