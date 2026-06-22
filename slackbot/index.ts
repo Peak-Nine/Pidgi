@@ -225,13 +225,22 @@ Dates and weekdays:
 Empty results and "none":
 - Never conclude "zero", "none" or "confirmed" from a single empty query. Re-check with a wider date
   window and a second method, and say "I couldn't retrieve X" rather than "X has none" when unsure.
-- For anything about a project's planned time ("what's planned on X", "who works on what on X",
-  before deleting/replanning a project), use get_project_reservations(project_id). It scopes,
-  resolves task names and labels the project in code, so it cannot pull or mislabel another
-  project's reservations. NEVER answer a project-planning question by listing reservations by person
-  and guessing which belong to the project — that is the mistake that put Allez Circulez blocks
-  under Co-Health.
-- Always do this re-check before proposing to delete anything.
+- Reservations in Teamleader carry NO project, only a task id. You cannot tell which project a
+  reservation belongs to from its task name, and you must never try. Two tools resolve the project
+  from the task in code; use them for every reservation read:
+    • get_project_reservations(project_id) — for "what's planned on project X", "who works on what
+      on X", or before deleting/replanning a project.
+    • get_user_reservations(user_id or user_query) — for "my blocks", "what is X working on", any
+      per-person or cross-project planning view. Pass min_minutes (e.g. 240) when the question is
+      about blocks of a certain size. It pages through everything, so its count is the COMPLETE set.
+  You no longer have direct access to the raw reservation list, on purpose. NEVER assemble a
+  reservation view by hand and guess which project each belongs to — that is the mistake that put
+  Allez Circulez "M3a" tasks under Takeda and hid the Enabel and Co-Health blocks that were on a
+  later page.
+- Because get_user_reservations / get_project_reservations return the complete set, trust their
+  count: if a project or block is absent, it truly is not planned. Do not say "none/zero" off any
+  other method.
+- Always do the relevant re-check before proposing to delete anything.
 
 Anchoring and trust (the studio's honest-over-confident rule):
 - Every reservation or capacity number you show must carry its real task name (via teamleader_get_task)
@@ -267,12 +276,24 @@ async function main(): Promise<void> {
   await mcp.connect(transport);
 
   const listed = await mcp.listTools();
-  const anthropicTools = listed.tools.map((t) => ({
-    name: t.name,
-    description: t.description ?? "",
-    input_schema: (t.inputSchema as any) ?? { type: "object", properties: {} },
-  }));
-  console.log(`Connected to Teamleader MCP. ${anthropicTools.length} tools available.`);
+  // Foot-gun tools the MODEL must not call directly. Listing reservations by person returns
+  // rows that carry no project, only a task id. The model then guesses the project from the
+  // task name and gets it wrong (it put two Allez Circulez "M3a" tasks under Takeda, and
+  // missed every Enabel/Co-Health block that sat on a later page). All reservation READS must
+  // go through get_project_reservations / get_user_reservations, which page through everything
+  // and resolve the project from each task in code. These stay callable by our own code via
+  // mcp.callTool — only the model's direct access is withheld.
+  const TL_DENY = new Set<string>(["teamleader_list_reservations"]);
+  const anthropicTools = listed.tools
+    .filter((t) => !TL_DENY.has(t.name))
+    .map((t) => ({
+      name: t.name,
+      description: t.description ?? "",
+      input_schema: (t.inputSchema as any) ?? { type: "object", properties: {} },
+    }));
+  console.log(
+    `Connected to Teamleader MCP. Exposing ${anthropicTools.length} tools to the model; ${TL_DENY.size} reservation-read tool(s) withheld (reservation reads go through the safe wrappers).`
+  );
 
   if (gcalEnabled()) {
     anthropicTools.push(...(gcalToolDefs as any[]));
@@ -331,6 +352,24 @@ async function main(): Promise<void> {
     },
   } as any);
   console.log("Project-reservations tool enabled.");
+
+  // User-scoped reservations across ALL projects, attributed and complete, in code.
+  anthropicTools.push({
+    name: "get_user_reservations",
+    description:
+      "Get ALL planned reservations for ONE person across EVERY project, correctly attributed and complete. Pass user_id OR user_query (a name or email), with optional start_date/end_date and min_minutes (e.g. 240 to keep only blocks of 4h or more). Returns every reservation with date, weekday, hours, the real task title, and — resolved from the task itself, never guessed — the correct project name and colour, plus an out_of_range flag. It pages through ALL results, so the count is the COMPLETE set: if a project or block is not in the output, it genuinely is not planned. Use THIS for any 'my blocks', 'what am I / is X working on', or cross-project personal-planning question. NEVER build such a view by listing reservations by hand and guessing the project.",
+    input_schema: {
+      type: "object",
+      properties: {
+        user_id: { type: "string", description: "Teamleader user id (preferred)" },
+        user_query: { type: "string", description: "Name or email to resolve to a user, if the id is unknown" },
+        start_date: { type: "string", description: "Window start (YYYY-MM-DD)" },
+        end_date: { type: "string", description: "Window end (YYYY-MM-DD)" },
+        min_minutes: { type: "number", description: "Only return blocks of at least this many minutes (e.g. 240 for 4h+)" },
+      },
+    },
+  } as any);
+  console.log("User-reservations tool enabled.");
 
   // Slack admin tools (need the bot to have channel-management + chat:write scopes).
   anthropicTools.push(
@@ -526,6 +565,111 @@ async function main(): Promise<void> {
         return { isError: false, text: JSON.stringify({ project: projectTitle, project_id: projectId, window: { start, end }, count: rows.length, reservations: rows }, null, 2) };
       } catch (e: any) {
         return { isError: true, text: `get_project_reservations failed: ${e?.message || e}` };
+      }
+    }
+    if (name === "get_user_reservations") {
+      try {
+        const tl = async (t: string, a: any): Promise<any> => {
+          const r: any = await mcp.callTool({ name: "teamleader_" + t, arguments: a || {} });
+          const txt = Array.isArray(r?.content) ? r.content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("") : "";
+          try { return JSON.parse(txt); } catch { return {}; }
+        };
+        // Resolve the user (by id, or by name/email query).
+        const usersR = await tl("list_users", { page_size: 100 });
+        const users = usersR.data || [];
+        const userName: Record<string, string> = {};
+        users.forEach((u: any) => {
+          userName[u.id] = `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.email || u.id;
+        });
+        let userId = String(input.user_id || "").trim();
+        if (!userId && input.user_query) {
+          const q = String(input.user_query).toLowerCase().trim();
+          const hit = users.find((u: any) =>
+            (u.email || "").toLowerCase() === q ||
+            (u.first_name || "").toLowerCase() === q ||
+            `${u.first_name || ""} ${u.last_name || ""}`.toLowerCase().includes(q)
+          );
+          if (hit) userId = hit.id;
+        }
+        if (!userId) return { isError: true, text: "get_user_reservations needs a valid user_id or a user_query that matches someone." };
+
+        const today = new Date().toISOString().slice(0, 10);
+        const start = input.start_date || today;
+        const end = input.end_date || new Date(Date.now() + 180 * 86400000).toISOString().slice(0, 10);
+
+        // Fetch ALL reservation pages for this user (never stop at page 1).
+        const reservations: any[] = [];
+        for (let page = 1; page <= 50; page++) {
+          const r = await tl("list_reservations", { assignees: [{ type: "user", id: userId }], start_date: start, end_date: end, page, page_size: 100 });
+          const batch = r.data || [];
+          reservations.push(...batch);
+          if (batch.length < 100) break;
+        }
+
+        // Resolve each task -> {title, projectId}, deduped. The project comes from the TASK,
+        // never from the task name, so it cannot be mis-attributed.
+        const taskIds = Array.from(new Set(reservations.filter((r) => r.source?.type === "task" && r.source?.id).map((r) => r.source.id)));
+        const taskInfo: Record<string, { title: string; projectId: string | null }> = {};
+        for (let i = 0; i < taskIds.length; i += 8) {
+          const chunk = taskIds.slice(i, i + 8) as string[];
+          await Promise.all(chunk.map(async (id) => {
+            try {
+              const t = await tl("get_task", { id });
+              taskInfo[id] = { title: t?.data?.title || "(task)", projectId: t?.data?.project?.id || null };
+            } catch { taskInfo[id] = { title: "(task)", projectId: null }; }
+          }));
+        }
+
+        // Project id -> {title, color}: all projects (paged), with a per-id fallback.
+        const projInfo: Record<string, { title: string; color: string | null }> = {};
+        for (let page = 1; page <= 10; page++) {
+          const pr = await tl("list_projects_v2", { page, page_size: 100 });
+          const batch = pr.data || [];
+          batch.forEach((p: any) => { projInfo[p.id] = { title: p.title || p.id, color: p.color || null }; });
+          if (batch.length < 100) break;
+        }
+        const needed = Array.from(new Set(Object.values(taskInfo).map((t) => t.projectId).filter(Boolean))) as string[];
+        for (const pid of needed) {
+          if (!projInfo[pid]) {
+            try { const p = await tl("get_project_v2", { id: pid }); projInfo[pid] = { title: p?.data?.title || pid, color: p?.data?.color || null }; }
+            catch { projInfo[pid] = { title: pid, color: null }; }
+          }
+        }
+
+        const minMin = Number(input.min_minutes) || 0;
+        const rows = reservations
+          .filter((r) => (r.duration?.value || 0) >= minMin)
+          .map((r) => {
+            const tid = r.source?.id;
+            const ti = (tid && taskInfo[tid]) || { title: "(non-task block)", projectId: null };
+            const pi = ti.projectId ? projInfo[ti.projectId] : null;
+            return {
+              date: r.date,
+              weekday: weekdayOf(r.date),
+              hours: (r.duration?.value || 0) / 60,
+              task: ti.title,
+              project: pi?.title || (ti.projectId || "(no project on source)"),
+              project_color: pi?.color || null,
+              out_of_range: !!(r.date_range_status && r.date_range_status !== "within_range"),
+            };
+          })
+          .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+        return {
+          isError: false,
+          text: JSON.stringify({
+            user: userName[userId] || userId,
+            user_id: userId,
+            window: { start, end },
+            min_minutes: minMin,
+            count: rows.length,
+            complete: true,
+            note: "Project is resolved from each task, not guessed. This is the COMPLETE set across all projects for the window — if a project or block is absent here it is genuinely not planned.",
+            reservations: rows,
+          }, null, 2),
+        };
+      } catch (e: any) {
+        return { isError: true, text: `get_user_reservations failed: ${e?.message || e}` };
       }
     }
     if (name.startsWith("gcal_")) {
