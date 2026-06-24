@@ -31,6 +31,7 @@
  */
 
 import path from "path";
+import { readFileSync } from "fs";
 import dotenv from "dotenv";
 import { App, ExpressReceiver } from "@slack/bolt";
 import Anthropic from "@anthropic-ai/sdk";
@@ -1007,6 +1008,19 @@ async function main(): Promise<void> {
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  // Private static page (roadtrip itinerary), served from slackbot/roadtrip.html,
+  // gated by the same key as the dashboard so it is not publicly listed or guessable.
+  receiver.router.get("/roadtrip", (req: any, res: any) => {
+    if (!dashKeyOk(req, res)) return;
+    try {
+      const html = readFileSync(path.join(__dirname, "roadtrip.html"), "utf8");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch {
+      res.status(404).send("Roadtrip page not found.");
     }
   });
 

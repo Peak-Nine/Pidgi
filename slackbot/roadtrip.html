@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roadtrip 2026 — the loop south</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0c1713;
+    --ink-2:#10201b;
+    --paper:#ece4d3;
+    --paper-soft:#bcc6bd;
+    --muted:#8ba093;
+    --line:rgba(236,228,211,.14);
+    --display:"Fraunces", Georgia, serif;
+    --body:"Hanken Grotesk", system-ui, sans-serif;
+    --mono:"Spline Sans Mono", ui-monospace, monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--ink);
+    color:var(--paper);
+    font-family:var(--body);
+    font-weight:400;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(120% 80% at 80% -10%, rgba(196,131,77,.10), transparent 55%),
+      radial-gradient(100% 70% at 0% 110%, rgba(58,96,86,.22), transparent 60%),
+      linear-gradient(180deg, #0a1410 0%, #0c1713 40%, #0e1a16 100%);
+  }
+  .wrap{position:relative;z-index:1}
+
+  /* ---------- top nav ---------- */
+  .topbar{
+    position:fixed;top:0;left:0;right:0;z-index:50;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px clamp(16px,4vw,40px);
+    backdrop-filter:blur(8px);
+    background:linear-gradient(180deg, rgba(10,20,16,.82), rgba(10,20,16,0));
+  }
+  .brand{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--paper-soft)}
+  .brand b{color:var(--paper);font-weight:600}
+  .dots{display:flex;gap:9px;align-items:center}
+  .dot{
+    width:9px;height:9px;border-radius:50%;border:1px solid rgba(236,228,211,.45);
+    background:transparent;cursor:pointer;transition:all .35s ease;padding:0;
+  }
+  .dot:hover{transform:scale(1.25);border-color:var(--paper)}
+  .dot.active{background:var(--paper);border-color:var(--paper);box-shadow:0 0 0 4px rgba(236,228,211,.12)}
+  .dots .label{display:none}
+  @media(min-width:900px){
+    .dots{gap:18px}
+    .dot{display:flex;align-items:center;gap:8px;width:auto;height:auto;border:0;background:none}
+    .dot .pip{width:7px;height:7px;border-radius:50%;border:1px solid rgba(236,228,211,.45);transition:all .3s}
+    .dot.active .pip{background:var(--paper);border-color:var(--paper)}
+    .dot .label{display:inline;font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);transition:color .3s}
+    .dot.active .label,.dot:hover .label{color:var(--paper)}
+  }
+
+  /* ---------- hero ---------- */
+  .hero{
+    min-height:100svh;display:flex;flex-direction:column;justify-content:flex-end;
+    padding:0 clamp(16px,4vw,40px) clamp(28px,5vh,60px);
+    position:relative;overflow:hidden;
+  }
+  .hero-sky{position:absolute;inset:0;z-index:-1}
+  .hero-sky svg{width:100%;height:100%;display:block}
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;letter-spacing:.28em;text-transform:uppercase;
+    color:var(--paper-soft);margin-bottom:18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  }
+  .eyebrow .tick{width:26px;height:1px;background:var(--paper-soft);display:inline-block}
+  h1.title{
+    font-family:var(--display);font-weight:340;font-size:clamp(2.6rem,8.2vw,6.2rem);
+    line-height:.98;letter-spacing:-.015em;max-width:15ch;
+  }
+  h1.title em{font-style:italic;color:#e7b98a}
+  .lede{
+    margin-top:22px;max-width:46ch;font-size:clamp(1rem,1.6vw,1.22rem);color:#d8d2c2;
+  }
+  .stats{
+    margin-top:34px;display:flex;flex-wrap:wrap;gap:clamp(20px,5vw,56px);
+    padding-top:22px;border-top:1px solid var(--line);
+  }
+  .stat .n{font-family:var(--display);font-size:clamp(1.7rem,3.4vw,2.6rem);line-height:1;font-weight:380}
+  .stat .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-top:7px}
+  .scrollcue{margin-top:30px;font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:10px}
+  .scrollcue .arr{display:inline-block;animation:bob 1.8s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
+
+  /* ---------- journey rail ---------- */
+  .route{position:relative;padding:clamp(40px,8vh,90px) 0 30px}
+  .rail{
+    position:absolute;left:clamp(28px,6vw,80px);top:0;bottom:0;width:2px;
+    background:repeating-linear-gradient(180deg, rgba(236,228,211,.34) 0 14px, transparent 14px 30px);
+    z-index:0;
+  }
+  @media(min-width:780px){.rail{left:50%;transform:translateX(-1px)}}
+
+  .stop{position:relative;z-index:1;padding:clamp(34px,7vh,80px) clamp(16px,4vw,40px);max-width:1180px;margin:0 auto}
+  .stop-inner{display:grid;gap:clamp(20px,3vw,40px);grid-template-columns:1fr;align-items:center}
+  @media(min-width:780px){
+    .stop-inner{grid-template-columns:1fr 1fr}
+    .stop:nth-child(even) .scene-wrap{order:2}
+  }
+
+  .marker{
+    position:absolute;left:clamp(28px,6vw,80px);top:clamp(34px,7vh,80px);
+    transform:translate(-50%,0);z-index:2;
+    width:54px;height:54px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    background:var(--ink-2);border:1px solid var(--accent,#fff);
+    font-family:var(--mono);font-size:13px;font-weight:600;color:var(--accent,#fff);
+    box-shadow:0 0 0 6px var(--ink), 0 0 28px -4px var(--accent,#fff);
+  }
+  @media(min-width:780px){.marker{left:50%}}
+
+  .scene-wrap{
+    border-radius:16px;overflow:hidden;position:relative;
+    border:1px solid rgba(236,228,211,.12);
+    box-shadow:0 30px 60px -30px rgba(0,0,0,.7);
+    aspect-ratio:16/10;background:#06100d;cursor:pointer;outline:none;
+  }
+  .scene-wrap:focus-visible{box-shadow:0 0 0 3px var(--accent,#fff), 0 30px 60px -30px rgba(0,0,0,.7)}
+  .scene-wrap svg{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1}
+  .photo-layer{
+    position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    opacity:0;transition:opacity .55s ease;z-index:2;
+  }
+  .photo-layer.show{opacity:1}
+  .scene-cap{
+    position:absolute;left:0;right:0;bottom:0;z-index:3;
+    padding:14px 16px;display:flex;justify-content:space-between;align-items:flex-end;
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+    color:rgba(255,255,255,.92);
+    background:linear-gradient(0deg, rgba(0,0,0,.6), transparent);
+  }
+  .tap-pill{
+    position:absolute;top:12px;right:12px;z-index:4;pointer-events:none;
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+    color:#fff;background:rgba(8,16,12,.5);backdrop-filter:blur(5px);
+    border:1px solid rgba(255,255,255,.28);border-radius:999px;
+    padding:6px 11px;display:flex;align-items:center;gap:7px;
+  }
+  .tap-pill .lens{width:9px;height:9px;border-radius:50%;border:1.5px solid #fff;display:inline-block;flex:none}
+  .tap-pill.ready{animation:pulse 2.6s ease-in-out 1s 2}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}50%{box-shadow:0 0 0 5px rgba(255,255,255,.16)}}
+  .tap-dots{position:absolute;top:15px;left:14px;z-index:4;display:flex;gap:5px;pointer-events:none}
+  .tap-dots i{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.35);transition:background .3s}
+  .tap-dots i.on{background:#fff}
+
+  .copy .idx{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--accent,#fff);text-transform:uppercase}
+  .copy h2{font-family:var(--display);font-weight:360;font-size:clamp(2rem,4.4vw,3.2rem);line-height:1.02;letter-spacing:-.01em;margin:8px 0 4px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;margin:12px 0 18px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--muted)}
+  .meta .drive{color:var(--paper);border:1px solid var(--line);border-radius:999px;padding:4px 11px;display:inline-flex;gap:7px;align-items:center}
+  .meta .drive b{color:var(--accent,#fff);font-weight:600}
+  .copy p{color:#cfd6cd;max-width:48ch}
+  .copy p + p{margin-top:12px}
+
+  .tags{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 6px}
+  .tag{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--accent,#fff);border:1px solid var(--accent,#fff);border-radius:4px;padding:5px 9px;opacity:.85}
+
+  .doings{margin-top:20px;border-top:1px solid var(--line);padding-top:18px}
+  .doings .dh{font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+  .doings ul{list-style:none;display:grid;gap:10px}
+  .doings li{display:flex;gap:12px;align-items:flex-start;font-size:.96rem;color:#dde3da}
+  .doings li .mk{flex:none;margin-top:.45em;width:7px;height:7px;border-radius:2px;background:var(--accent,#fff);transform:rotate(45deg);opacity:.9}
+  .doings li b{color:var(--paper);font-weight:600}
+
+  .reveal{opacity:0;transform:translateY(26px);transition:opacity .9s cubic-bezier(.2,.7,.2,1), transform .9s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  /* ---------- outro ---------- */
+  .outro{max-width:1180px;margin:0 auto;padding:clamp(50px,9vh,120px) clamp(16px,4vw,40px) clamp(40px,7vh,90px);position:relative;z-index:1;text-align:center}
+  .outro .home-mk{width:54px;height:54px;border-radius:50%;margin:0 auto 22px;display:flex;align-items:center;justify-content:center;background:var(--ink-2);border:1px solid #d8c9a6;color:#d8c9a6;box-shadow:0 0 0 6px var(--ink),0 0 28px -4px #d8c9a6;font-family:var(--mono);font-size:18px}
+  .outro h2{font-family:var(--display);font-weight:340;font-size:clamp(2rem,5vw,3.4rem);line-height:1.04;max-width:18ch;margin:0 auto}
+  .outro h2 em{font-style:italic;color:#e7b98a}
+  .outro p{max-width:50ch;margin:20px auto 0;color:#cfd6cd}
+  .ledger{margin:42px auto 0;max-width:760px;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .ledger div{background:var(--ink-2);padding:18px 14px}
+  .ledger .n{font-family:var(--display);font-size:1.6rem;line-height:1}
+  .ledger .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-top:8px}
+  .fineprint{margin:40px auto 0;max-width:62ch;font-family:var(--mono);font-size:10.5px;line-height:1.7;letter-spacing:.02em;color:var(--muted);text-align:left;border-top:1px solid var(--line);padding-top:18px}
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation:none!important}
+    .photo-layer{transition:none!important}
+    html{scroll-behavior:auto}
+    .reveal{opacity:1;transform:none;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- NAV -->
+  <nav class="topbar">
+    <div class="brand"><b>ROADTRIP 2026</b> &nbsp;·&nbsp; the loop south</div>
+    <div class="dots" id="dots">
+      <button class="dot" data-go="s1"><span class="pip"></span><span class="label">Vosges</span></button>
+      <button class="dot" data-go="s2"><span class="pip"></span><span class="label">Obersee</span></button>
+      <button class="dot" data-go="s3"><span class="pip"></span><span class="label">Liechtenstein</span></button>
+      <button class="dot" data-go="s4"><span class="pip"></span><span class="label">Maggiore</span></button>
+      <button class="dot" data-go="s5"><span class="pip"></span><span class="label">Dijon</span></button>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <header class="hero">
+    <div class="hero-sky" aria-hidden="true">
+      <svg viewBox="0 0 1440 900" preserveAspectRatio="xMidYMax slice">
+        <defs>
+          <linearGradient id="hsky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#13302e"/>
+            <stop offset="42%" stop-color="#1c4a44"/>
+            <stop offset="72%" stop-color="#c98a52"/>
+            <stop offset="100%" stop-color="#e7b07a"/>
+          </linearGradient>
+        </defs>
+        <rect width="1440" height="900" fill="url(#hsky)"/>
+        <circle cx="1090" cy="300" r="58" fill="#f4d9a8" opacity=".9"/>
+        <circle cx="1090" cy="300" r="100" fill="#f4d9a8" opacity=".18"/>
+        <path d="M0 560 L160 470 L330 540 L520 430 L720 520 L900 420 L1110 510 L1290 440 L1440 500 L1440 900 L0 900Z" fill="#21574e" opacity=".55"/>
+        <path d="M0 640 L210 560 L420 640 L640 540 L860 630 L1080 560 L1280 640 L1440 580 L1440 900 L0 900Z" fill="#163e39" opacity=".8"/>
+        <path d="M0 740 L250 660 L500 740 L760 660 L1020 740 L1260 670 L1440 730 L1440 900 L0 900Z" fill="#0e2a26"/>
+        <g fill="#08130f">
+          <path d="M0 900 L0 770 Q60 760 90 700 Q120 760 180 772 L180 900Z"/>
+          <path d="M1440 900 L1440 760 Q1380 752 1352 690 Q1322 754 1262 770 L1262 900Z"/>
+        </g>
+      </svg>
+    </div>
+
+    <div class="eyebrow reveal"><span class="tick"></span> currently saved as <b style="font-weight:600;color:#e7b98a;margin-left:.3em">ROADTRIP_2026.xlsx</b></div>
+    <h1 class="title reveal">From our front door, all the way <em>down to the lakes.</em></h1>
+    <p class="lede reveal">Eleven days, a loop through five countries. Forest first, then high still water, then a whole tiny country, then Italy by boat, and a wine town to land softly on the way home.</p>
+
+    <div class="stats reveal">
+      <div class="stat"><div class="n">11</div><div class="k">days on the road</div></div>
+      <div class="stat"><div class="n">5</div><div class="k">countries</div></div>
+      <div class="stat"><div class="n">5</div><div class="k">base camps</div></div>
+      <div class="stat"><div class="n">~25h</div><div class="k">total driving</div></div>
+    </div>
+    <div class="scrollcue reveal">scroll to ride along &nbsp;·&nbsp; tap a scene for photos <span class="arr">↓</span></div>
+  </header>
+
+  <!-- ROUTE -->
+  <div class="route">
+    <div class="rail" aria-hidden="true"></div>
+
+    <!-- STOP 1 — VOSGES -->
+    <section class="stop" id="s1" style="--accent:#7fc6a8">
+      <div class="marker reveal">01</div>
+      <div class="stop-inner">
+        <div class="scene-wrap reveal">
+          <svg viewBox="0 0 800 500" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Forested Vosges ridges with a small mountain lake">
+            <defs>
+              <linearGradient id="v-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bfe0d6"/><stop offset="1" stop-color="#eef0d8"/></linearGradient>
+              <linearGradient id="v-lake" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3f8f86"/><stop offset="1" stop-color="#2c6f6a"/></linearGradient>
+            </defs>
+            <rect width="800" height="500" fill="url(#v-sky)"/>
+            <circle cx="150" cy="120" r="46" fill="#f6efc9" opacity=".85"/>
+            <path d="M0 250 L120 190 L260 250 L420 180 L600 250 L730 200 L800 235 L800 500 L0 500Z" fill="#6aa68f" opacity=".5"/>
+            <path d="M0 300 L160 240 L340 305 L520 240 L700 305 L800 270 L800 500 L0 500Z" fill="#4d8e7a"/>
+            <path d="M0 330 C200 300 230 350 420 330 C600 312 650 350 800 320" fill="none" stroke="#e9e2c8" stroke-width="4" stroke-dasharray="2 12" stroke-linecap="round" opacity=".8"/>
+            <ellipse cx="430" cy="430" rx="220" ry="46" fill="url(#v-lake)"/>
+            <ellipse cx="430" cy="424" rx="150" ry="20" fill="#bfe0d6" opacity=".22"/>
+            <g fill="#1f3c30">
+              <path d="M70 500 L70 380 Q110 372 132 318 Q156 374 196 384 L196 500Z"/>
+              <path d="M150 500 L150 408 Q176 402 192 362 Q210 404 240 412 L240 500Z"/>
+              <path d="M620 500 L620 372 Q662 364 686 308 Q712 366 752 376 L752 500Z"/>
+              <path d="M712 500 L712 410 Q738 404 754 366 Q772 406 800 414 L800 500Z"/>
+            </g>
+          </svg>
+          <div class="scene-cap"><span>The Vosges · Le Valtin</span><span>fr</span></div>
+        </div>
+        <div class="copy reveal">
+          <div class="idx">First base · the warm-up</div>
+          <h2>Forest, ridges, a string of glacier lakes</h2>
+          <div class="meta">
+            <span class="drive">drive in <b>5u22</b></span>
+            <span>Wed 15 → Sat 18 · 3 nights</span>
+          </div>
+          <p>You start gently. Rounded green mountains, deep pine, and a ridge road called the Route des Crêtes that runs along the top like a balcony. On a clear day you can see the Black Forest, and sometimes the Alps far off, which is a nice promise of what is coming.</p>
+          <p>Le Valtin sits right under the Col de la Schlucht, the highest pass in the Vosges. So the good stuff is on the doorstep.</p>
+          <div class="tags"><span class="tag">forest</span><span class="tag">easy hikes</span><span class="tag">lakes</span><span class="tag">cheese country</span></div>
+          <div class="doings">
+            <div class="dh">on the ground</div>
+            <ul>
+              <li><span class="mk"></span><span>Walk the <b>Sentier des Roches</b> from the Col de la Schlucht, a rocky path with metal staircases and big views (skip it if anyone hates heights).</span></li>
+              <li><span class="mk"></span><span>Do the <b>four-lake walk</b>: Lac Vert, Lac des Truites, Lac Noir and Lac Blanc, looping back along the open ridge.</span></li>
+              <li><span class="mk"></span><span>Climb the <b>Hohneck</b> (1363m), the highest summit around, for a 360° look over Alsace.</span></li>
+              <li><span class="mk"></span><span>Lunch at a <b>ferme-auberge</b> (a working farm inn) and try the local Munster cheese.</span></li>
+              <li><span class="mk"></span><span>Late afternoon is best for spotting <b>chamois</b> on the ridges. Guided evening walks exist if you want help finding them.</span></li>
+              <li><span class="mk"></span><span>Easy day: <b>Lac de Gérardmer</b> nearby for a swim or a pedalo, plus the old water-powered sawmill at Le Lançoir.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- STOP 2 — OBERSEE -->
+    <section class="stop" id="s2" style="--accent:#67b9c9">
+      <div class="marker reveal">02</div>
+      <div class="stop-inner">
+        <div class="scene-wrap reveal">
+          <svg viewBox="0 0 800 500" preserveAspectRatio="xMidYMid slice" role="img" aria-label="A wide calm lake with an old lakeside town and sailboats">
+            <defs>
+              <linearGradient id="o-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bcd9e6"/><stop offset="1" stop-color="#eef2e2"/></linearGradient>
+              <linearGradient id="o-lake" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7cc0d4"/><stop offset="1" stop-color="#4f9fb8"/></linearGradient>
+            </defs>
+            <rect width="800" height="500" fill="url(#o-sky)"/>
+            <circle cx="640" cy="120" r="40" fill="#f7efce" opacity=".8"/>
+            <!-- far gentle hills -->
+            <path d="M0 250 Q200 210 400 244 Q600 276 800 240 L800 300 L0 300Z" fill="#7a9e7d" opacity=".65"/>
+            <path d="M0 270 Q220 240 440 268 Q640 292 800 264 L800 300 L0 300Z" fill="#688c6b"/>
+            <!-- lakeside town left, with Münster spire -->
+            <g fill="#e7ded0">
+              <rect x="40" y="250" width="26" height="40"/><rect x="70" y="258" width="22" height="32"/><rect x="138" y="256" width="24" height="34"/><rect x="166" y="262" width="20" height="28"/>
+            </g>
+            <g fill="#b8654a"><rect x="40" y="245" width="26" height="6"/><rect x="138" y="251" width="24" height="6"/></g>
+            <rect x="104" y="214" width="14" height="76" fill="#dcd2c0"/><path d="M104 214 L111 188 L118 214Z" fill="#8a96a0"/>
+            <!-- lake -->
+            <rect x="0" y="290" width="800" height="210" fill="url(#o-lake)"/>
+            <!-- wooded island (Mainau-ish) -->
+            <ellipse cx="650" cy="318" rx="90" ry="16" fill="#3f7a52"/>
+            <g fill="#356b46"><circle cx="610" cy="306" r="13"/><circle cx="640" cy="300" r="16"/><circle cx="675" cy="306" r="13"/><circle cx="700" cy="310" r="11"/></g>
+            <!-- sailboats -->
+            <g><path d="M250 360 L250 318 L286 360Z" fill="#f4f7f3"/><path d="M250 360 L250 332 L226 360Z" fill="#dde7e4"/><path d="M214 360 q36 14 76 0 l-10 12 l-56 0Z" fill="#3a4a52"/></g>
+            <g><path d="M430 384 L430 352 L458 384Z" fill="#f4f7f3"/><path d="M408 384 q24 9 50 0 l-7 9 l-36 0Z" fill="#3a4a52"/></g>
+            <g stroke="#dff0f4" stroke-width="2" opacity=".4"><line x1="80" y1="420" x2="280" y2="420"/><line x1="500" y1="450" x2="720" y2="450"/></g>
+          </svg>
+          <div class="scene-cap"><span>Obersee · Lake Constance</span><span>de</span></div>
+        </div>
+        <div class="copy reveal">
+          <div class="idx">Second base · the big lake</div>
+          <h2>A wide summer lake and an old town</h2>
+          <div class="meta">
+            <span class="drive">drive in <b>3u22</b></span>
+            <span>Sat 18 → Mon 20 · 2 nights</span>
+          </div>
+          <p>This is the water stop. The Obersee is the big open basin of Lake Constance, the lake where Germany, Switzerland and Austria all meet. You settle near Konstanz, an old university town sitting right where the lake pinches in.</p>
+          <p>Warm, easy days. Swimming, ferries, and ice cream on the promenade.</p>
+          <div class="tags"><span class="tag">big lake</span><span class="tag">swimming</span><span class="tag">ferries</span><span class="tag">old town</span></div>
+          <div class="doings">
+            <div class="dh">on the ground</div>
+            <ul>
+              <li><span class="mk"></span><span>Wander <b>Konstanz</b> old town and harbour, past the slowly turning Imperia statue at the water's edge.</span></li>
+              <li><span class="mk"></span><span>Spend an afternoon on <b>Mainau</b>, the island of flowers and gardens, a short hop away.</span></li>
+              <li><span class="mk"></span><span>Take the ferry across to <b>Meersburg</b>, a pretty medieval town under its old castle.</span></li>
+              <li><span class="mk"></span><span><b>Swim</b> from one of the lakeside lidos, or rent a paddleboat or SUP; the water is warm in summer.</span></li>
+              <li><span class="mk"></span><span>Easy day trips: the <b>Reichenau</b> island gardens, or the <b>Rhine Falls</b> near Schaffhausen, about an hour off.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- STOP 3 — LIECHTENSTEIN -->
+    <section class="stop" id="s3" style="--accent:#9d8bd0">
+      <div class="marker reveal">03</div>
+      <div class="stop-inner">
+        <div class="scene-wrap reveal">
+          <svg viewBox="0 0 800 500" preserveAspectRatio="xMidYMid slice" role="img" aria-label="A castle on a rocky spur above a valley at dusk">
+            <defs>
+              <linearGradient id="l-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b3a63"/><stop offset="55%" stop-color="#7c6f9b"/><stop offset="1" stop-color="#d8a98c"/></linearGradient>
+              <linearGradient id="l-rock" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4b4a5e"/><stop offset="1" stop-color="#2c2b3a"/></linearGradient>
+            </defs>
+            <rect width="800" height="500" fill="url(#l-sky)"/>
+            <circle cx="640" cy="140" r="34" fill="#f3e7d2" opacity=".9"/>
+            <path d="M0 280 L180 120 L360 280Z" fill="#5a5774" opacity=".7"/>
+            <path d="M260 280 L470 100 L700 280Z" fill="#4a4865" opacity=".8"/>
+            <path d="M520 280 L700 150 L800 250 L800 280Z" fill="#403e5a" opacity=".8"/>
+            <rect x="0" y="330" width="800" height="170" fill="#23314a"/>
+            <path d="M0 360 Q400 330 800 365 L800 500 L0 500Z" fill="#1a2740"/>
+            <path d="M120 330 L150 220 L210 200 L250 240 L300 330Z" fill="url(#l-rock)"/>
+            <g fill="#cdbfa0">
+              <rect x="178" y="196" width="56" height="40"/>
+              <rect x="170" y="180" width="16" height="22"/>
+              <rect x="226" y="180" width="16" height="22"/>
+              <rect x="200" y="170" width="12" height="20"/>
+            </g>
+            <g fill="#7c5a3a"><rect x="196" y="206" width="9" height="14"/><rect x="212" y="206" width="9" height="14"/></g>
+            <g fill="#f2cf8e"><circle cx="360" cy="400" r="2.4"/><circle cx="392" cy="408" r="2.4"/><circle cx="420" cy="398" r="2.4"/><circle cx="455" cy="410" r="2.4"/><circle cx="500" cy="402" r="2.4"/><circle cx="540" cy="412" r="2.4"/></g>
+          </svg>
+          <div class="scene-cap"><span>Vaduz · Liechtenstein</span><span>li</span></div>
+        </div>
+        <div class="copy reveal">
+          <div class="idx">Third base · the curiosity</div>
+          <h2>A whole country, mountains and all</h2>
+          <div class="meta">
+            <span class="drive">drive in <b>1u15</b></span>
+            <span>Mon 20 → Wed 22 · 2 nights</span>
+          </div>
+          <p>The short hop. Liechtenstein is tiny, tucked between Switzerland and Austria along the Rhine, and you can get the measure of it in a day. The prince's castle stands on a crag right over the capital, which gives the whole place a fairytale opening.</p>
+          <p>Then it surprises you, because behind the small valley there are real, serious mountains.</p>
+          <div class="tags"><span class="tag">tiny country</span><span class="tag">castle</span><span class="tag">ridge hike</span><span class="tag">a curiosity</span></div>
+          <div class="doings">
+            <div class="dh">on the ground</div>
+            <ul>
+              <li><span class="mk"></span><span>Look up at <b>Vaduz Castle</b> (the royal residence, so admired from outside) and wander the small capital and its art museums.</span></li>
+              <li><span class="mk"></span><span>Drive up to <b>Malbun</b>, the little mountain village, for easy walks and a chairlift.</span></li>
+              <li><span class="mk"></span><span>For the sure-footed: the <b>Fürstensteig</b>, the country's famous ridge path. It is exposed and only for experienced walkers, so check conditions first.</span></li>
+              <li><span class="mk"></span><span>Visit <b>Gutenberg Castle</b> in Balzers, the one you can actually walk into.</span></li>
+              <li><span class="mk"></span><span>Silly and fun: get a <b>souvenir passport stamp</b>, then say you spent two nights in a principality.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- STOP 4 — LAGO MAGGIORE -->
+    <section class="stop" id="s4" style="--accent:#e6a15c">
+      <div class="marker reveal">04</div>
+      <div class="stop-inner">
+        <div class="scene-wrap reveal">
+          <svg viewBox="0 0 800 500" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Warm Italian lake with island gardens and palms">
+            <defs>
+              <linearGradient id="m-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4d8a6"/><stop offset="55%" stop-color="#f0b277"/><stop offset="1" stop-color="#e89f86"/></linearGradient>
+              <linearGradient id="m-lake" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5fa8c4"/><stop offset="1" stop-color="#356f96"/></linearGradient>
+            </defs>
+            <rect width="800" height="500" fill="url(#m-sky)"/>
+            <circle cx="600" cy="150" r="52" fill="#fdeec4" opacity=".85"/>
+            <path d="M0 250 L200 150 L400 250Z" fill="#c98f8a" opacity=".5"/>
+            <path d="M280 250 L520 140 L760 250Z" fill="#bd827f" opacity=".55"/>
+            <rect x="0" y="250" width="800" height="250" fill="url(#m-lake)"/>
+            <g stroke="#dff0f4" stroke-width="2" opacity=".35"><line x1="60" y1="330" x2="220" y2="330"/><line x1="520" y1="350" x2="700" y2="350"/></g>
+            <g>
+              <ellipse cx="300" cy="330" rx="120" ry="20" fill="#2f6b50"/>
+              <rect x="250" y="290" width="60" height="42" fill="#e7dcc4"/>
+              <rect x="262" y="278" width="36" height="16" fill="#cdbfa0"/>
+              <path d="M250 290 L280 268 L310 290Z" fill="#b89a6e"/>
+              <path d="M320 330 q22 -30 44 0" fill="#357a59"/><path d="M360 330 q18 -24 36 0" fill="#2f6b50"/>
+            </g>
+            <g><ellipse cx="560" cy="360" rx="70" ry="13" fill="#345f4a"/><rect x="540" y="338" width="14" height="22" fill="#e7dcc4"/><rect x="558" y="332" width="12" height="28" fill="#dac9a8"/><rect x="574" y="340" width="12" height="20" fill="#e7dcc4"/></g>
+            <g stroke="#1f4d39" stroke-width="6" fill="none" stroke-linecap="round">
+              <path d="M70 500 L82 360"/><path d="M700 500 L712 372"/>
+            </g>
+            <g fill="#2a6b48">
+              <path d="M82 360 q-44 -20 -64 4 q40 -2 64 12 q-36 -36 -8 -56 q4 30 8 40 q22 -34 56 -28 q-30 14 -56 28Z"/>
+              <path d="M712 372 q-40 -18 -58 4 q36 -2 58 10 q-32 -32 -6 -50 q4 26 6 36 q20 -30 50 -26 q-28 12 -50 26Z"/>
+            </g>
+            <path d="M420 408 q22 -10 44 0 l-8 12 l-28 0Z" fill="#3a2c22"/>
+          </svg>
+          <div class="scene-cap"><span>Lago Maggiore · Stresa</span><span>it</span></div>
+        </div>
+        <div class="copy reveal">
+          <div class="idx">Fourth base · the heart of it</div>
+          <h2>Italy, by boat, with the Alps behind</h2>
+          <div class="meta">
+            <span class="drive">drive in <b>3u00</b></span>
+            <span>Wed 22 → Fri 24 · 2 nights</span>
+          </div>
+          <p>This is the payoff. You come down out of the mountains into warmth: palm trees on the promenade, faded grand hotels, baroque palaces sitting on islands in the middle of a blue lake. Stresa is the base, and the boats do the work from there.</p>
+          <p>If the trip has a postcard, it is here.</p>
+          <div class="tags"><span class="tag">warmth</span><span class="tag">boats</span><span class="tag">gardens</span><span class="tag">aperitivo</span><span class="tag">the romantic one</span></div>
+          <div class="doings">
+            <div class="dh">on the ground</div>
+            <ul>
+              <li><span class="mk"></span><span>Ferry to the <b>Borromean Islands</b>: Isola Bella for the baroque palace and ten terraced gardens (peacocks included), Isola Madre for the botanical gardens, and Isola dei Pescatori, a tiny fishing village, for lunch.</span></li>
+              <li><span class="mk"></span><span>Take the <b>Mottarone cable car</b> up for a view over the lake and a row of peaks.</span></li>
+              <li><span class="mk"></span><span>Boat to <b>Santa Caterina del Sasso</b>, a monastery built into a cliff over the water.</span></li>
+              <li><span class="mk"></span><span>Wander the <b>Villa Taranto gardens</b> across the bay in Verbania.</span></li>
+              <li><span class="mk"></span><span>Then do nothing useful at all: <b>swim, kayak, and an aperitivo</b> on the promenade as the light goes. A sunset cruise if you feel like it.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- STOP 5 — DIJON -->
+    <section class="stop" id="s5" style="--accent:#d59b6b">
+      <div class="marker reveal">05</div>
+      <div class="stop-inner">
+        <div class="scene-wrap reveal">
+          <svg viewBox="0 0 800 500" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Golden Burgundy vineyards below a town with a spire">
+            <defs>
+              <linearGradient id="d-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e9c79a"/><stop offset="1" stop-color="#f3e3c2"/></linearGradient>
+              <linearGradient id="d-field" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b98a3f"/><stop offset="1" stop-color="#8f6a2d"/></linearGradient>
+            </defs>
+            <rect width="800" height="500" fill="url(#d-sky)"/>
+            <circle cx="170" cy="130" r="44" fill="#f8edcb" opacity=".8"/>
+            <g fill="#8c4a3a">
+              <rect x="430" y="210" width="50" height="60"/><path d="M430 210 L455 180 L480 210Z" fill="#6e3a2e"/>
+              <rect x="500" y="225" width="44" height="45"/><path d="M500 225 L522 200 L544 225Z" fill="#6e3a2e"/>
+              <rect x="560" y="215" width="40" height="55"/><path d="M560 215 L580 188 L600 215Z" fill="#6e3a2e"/>
+            </g>
+            <rect x="612" y="150" width="22" height="120" fill="#9a5747"/><path d="M612 150 L623 110 L634 150Z" fill="#5f3328"/>
+            <rect x="500" y="222" width="44" height="6" fill="#3f7a4e"/>
+            <rect x="0" y="270" width="800" height="230" fill="url(#d-field)"/>
+            <g stroke="#6f5121" stroke-width="3" opacity=".55">
+              <path d="M-20 320 L820 300"/><path d="M-20 355 L820 332"/><path d="M-20 395 L820 368"/><path d="M-20 440 L820 410"/><path d="M-20 488 L820 455"/>
+            </g>
+            <g stroke="#caa258" stroke-width="2" opacity=".5">
+              <path d="M-20 338 L820 316"/><path d="M-20 375 L820 350"/><path d="M-20 418 L820 388"/>
+            </g>
+          </svg>
+          <div class="scene-cap"><span>Dijon · Bourgogne</span><span>fr</span></div>
+        </div>
+        <div class="copy reveal">
+          <div class="idx">Fifth base · the soft landing</div>
+          <h2>A good dinner before the last drive</h2>
+          <div class="meta">
+            <span class="drive">drive in <b>6u30</b></span>
+            <span>Fri 24 → Sat 25 · 1 night</span>
+          </div>
+          <p>One night to land softly. Dijon is the golden-stone capital of Burgundy, all old streets and good food, and just south of it the great wine road begins. So you finish the trip the right way, with a proper meal and a glass of something local.</p>
+          <div class="tags"><span class="tag">food</span><span class="tag">wine</span><span class="tag">old town</span><span class="tag">one last night</span></div>
+          <div class="doings">
+            <div class="dh">on the ground</div>
+            <ul>
+              <li><span class="mk"></span><span>Walk the old town and the <b>Palais des Ducs</b>, following the brass <b>owl trail</b>. Rub the little stone owl on Notre-Dame for luck on the road home.</span></li>
+              <li><span class="mk"></span><span>Buy proper <b>Dijon mustard</b> at the Maille shop, and eat at <b>Les Halles</b>, the covered market.</span></li>
+              <li><span class="mk"></span><span>If there's time before the drive: a slow morning down the <b>Route des Grands Crus</b> through Gevrey-Chambertin and Nuits-Saint-Georges toward Beaune.</span></li>
+              <li><span class="mk"></span><span>Order the classics: <b>boeuf bourguignon, escargots, a kir</b>. You earned it.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div><!-- /route -->
+
+  <!-- OUTRO -->
+  <footer class="outro reveal">
+    <div class="home-mk">⌂</div>
+    <h2>Then <em>home</em>, about 5u30, with the whole loop behind you.</h2>
+    <p>Forest to mirror lake to a tiny kingdom to an Italian island lunch to a Burgundy table. Five very different countries, and you sleep in your own bed on Saturday night.</p>
+
+    <div class="ledger">
+      <div><div class="n">11</div><div class="k">days</div></div>
+      <div><div class="n">5</div><div class="k">countries</div></div>
+      <div><div class="n">5</div><div class="k">base camps</div></div>
+      <div><div class="n">10</div><div class="k">nights away</div></div>
+      <div><div class="n">~25h</div><div class="k">driving</div></div>
+    </div>
+
+    <p class="fineprint">
+      Built from your <b>ROADTRIP_2026</b> sheet. The dates and drive times (5u22, 3u22, 1u15, 3u, 6u30, 5u30) are yours, copied straight across; the ~25h total is just those legs added up, not road distances. Days 13 and 14 were blank, so I started the trip with the drive on Wed the 15th. For stop two I've taken the Obersee as the main basin of Lake Constance near Konstanz, as you told me, which also fits the 1u15 hop to Liechtenstein. The things to do are real options for each place, not a fixed plan, so check opening hours and seasonal access before you go. The photos are the ones you picked. Tap any illustration to flip through them; they load straight from their original websites, so if one doesn't appear it's that site blocking outside links, not the wrong place.
+    </p>
+  </footer>
+
+</div>
+
+<script>
+(function(){
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---- reveal on scroll ---- */
+  var revs = document.querySelectorAll('.reveal');
+  if(prefersReduced){ revs.forEach(function(r){r.classList.add('in');}); }
+  else{
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+    },{threshold:.18, rootMargin:'0px 0px -8% 0px'});
+    revs.forEach(function(r){ io.observe(r); });
+  }
+
+  /* ---- nav ---- */
+  var dots = Array.prototype.slice.call(document.querySelectorAll('.dot'));
+  dots.forEach(function(d){
+    d.addEventListener('click', function(){
+      var el = document.getElementById(d.getAttribute('data-go'));
+      if(el) el.scrollIntoView({behavior: prefersReduced?'auto':'smooth', block:'start'});
+    });
+  });
+  var stops = ['s1','s2','s3','s4','s5'].map(function(id){return document.getElementById(id);});
+  var spy = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        var id = e.target.id;
+        dots.forEach(function(d){ d.classList.toggle('active', d.getAttribute('data-go')===id); });
+      }
+    });
+  },{threshold:.0, rootMargin:'-45% 0px -45% 0px'});
+  stops.forEach(function(s){ if(s) spy.observe(s); });
+
+  /* ---- tap-for-photos: photos chosen by you, loaded from their original sites ---- */
+  // Each stop shows the photos in order. Any that a site refuses to serve is skipped.
+  var PHOTOS = {
+    s1: [
+      "https://www.visit.alsace/wp-content/uploads/lei/pictures/231003091-le-hohneck-1-1600x900.jpg",
+      "https://escapadeur.eu/wp-content/uploads/2021/06/Sentier-des-Roches-en-Alsace-4295.jpg",
+      "https://www.larousse.fr/encyclopedie/data/images/1309577-Chamois.jpg",
+      "https://cdn-s-www.vosgesmatin.fr/images/1495BAC8-2664-42E2-A634-F7A12229FB8D/NW_raw/une-fois-dans-l-eau-la-balade-en-pedalo-offre-une-vue-a-360-sur-ce-qui-entoure-le-lac-photo-jerome-humbrecht-1692367306.jpg"
+    ],
+    s2: [
+      "https://d2dlwjt4udwgdy.cloudfront.net/eyJidWNrZXQiOiJpdHJhdmVsLWFzc2V0cy1wcm9kdWN0aW9uIiwia2V5IjoiZGUvaW1hZ2VzLzY5QzQzNDZFODBFM0JGOUZFQURGMzMwMUFBM0QxMkYwLmpwZyIsImVkaXRzIjp7InJlc2l6ZSI6eyJ3aWR0aCI6NzY3LCJoZWlnaHQiOjUxMX19fQ==",
+      "https://www.freizeit-bodensee.com/sites/default/files/bodensee-obersee.jpg",
+      "https://www.22places.com/images/2021/08/konstanz-bodensee.jpg"
+    ],
+    s3: [
+      "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/17/bb/a6/df/liechtenstein-is-a-25km.jpg?w=700&h=-1&s=1",
+      "https://www.jarniascyril.com/wp-content/uploads/2025/10/a414d41427bf5046968b389a8df8ab24-725x453.jpg",
+      "https://i0.wp.com/souvenirsideas.com/wp-content/uploads/2024/08/image-146.png?ssl=1",
+      "https://www.mirygiramondo.com/wp-content/uploads/2024/06/castle-7581503_1920.jpg"
+    ],
+    s4: [
+      "https://ciaotutti.nl/wp-content/smush-webp/2023/05/lago-maggiore-tips-bezienswaardigheden-1.jpg.webp",
+      "https://www.suncamp.nl/blog/wp-content/uploads/2025/04/steden-lago-maggiore-6.jpg",
+      "https://www.camperlagodorta.it/site/assets/files/1029/bg-maggiore.jpg"
+    ],
+    s5: [
+      "https://www.zininfrankrijk.nl/wp-content/uploads/2018/07/Dijon-3-shutterstock_1198007155.jpg",
+      "https://asset-prod.france.fr/INNOVEO_BFC_Tourisme_468a0d8c2a.jpg",
+      "https://www.reisroutes.be/userfiles/fotos/herenhuis-in-het-historische-centrum-van-dijon_22837_xl.jpg"
+    ]
+  };
+
+  function fp(name){ return name; }
+
+  Object.keys(PHOTOS).forEach(function(id){
+    var section = document.getElementById(id);
+    if(!section) return;
+    var wrap = section.querySelector('.scene-wrap');
+    if(!wrap) return;
+
+    var capEl = wrap.querySelector('.scene-cap span');
+    var place = capEl ? capEl.textContent.trim() : 'this stop';
+
+    var img = document.createElement('img');
+    img.className = 'photo-layer';
+    img.alt = place + ' — photo';
+    img.decoding = 'async';
+    wrap.appendChild(img);
+
+    var dotsBox = document.createElement('div');
+    dotsBox.className = 'tap-dots';
+    wrap.appendChild(dotsBox);
+
+    var pill = document.createElement('div');
+    pill.className = 'tap-pill';
+    pill.innerHTML = '<span class="lens"></span><span class="pt">loading photos…</span>';
+    wrap.appendChild(pill);
+    var pillText = pill.querySelector('.pt');
+
+    var loaded = [];        // photo URLs that loaded OK, in order
+    var idx = 0;            // 0 = illustration, 1..N = photos
+
+    function buildDots(){
+      dotsBox.innerHTML = '';
+      var n = loaded.length;
+      for(var i=0;i<n;i++){
+        var s = document.createElement('i');
+        if(i === idx-1) s.className = 'on';
+        dotsBox.appendChild(s);
+      }
+    }
+    function render(){
+      var max = loaded.length;
+      if(idx === 0 || max === 0){
+        idx = 0;
+        img.classList.remove('show');
+        pillText.textContent = max > 0 ? 'tap for photos' : 'photos unavailable';
+      } else {
+        img.src = loaded[idx-1];
+        img.classList.add('show');
+        pillText.textContent = idx + ' / ' + max;
+      }
+      buildDots();
+    }
+    function advance(){
+      var max = loaded.length;
+      if(max === 0) return;
+      idx = idx + 1;
+      if(idx > max) idx = 0;
+      render();
+    }
+
+    wrap.setAttribute('role','button');
+    wrap.setAttribute('tabindex','0');
+    wrap.setAttribute('aria-label','Tap to flip through photos of ' + place);
+    wrap.addEventListener('click', advance);
+    wrap.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); advance(); }
+    });
+
+    // load the chosen photos in order; skip any the site refuses to serve
+    var cands = PHOTOS[id];
+    var results = new Array(cands.length);
+    var settled = 0;
+    function collect(){
+      var picked = [];
+      for(var i=0;i<results.length;i++){
+        if(results[i]) picked.push(results[i]);
+      }
+      loaded = picked;
+      if(loaded.length && pillText.textContent === 'loading photos…'){
+        pillText.textContent = 'tap for photos';
+        pill.classList.add('ready');
+      }
+      buildDots();
+    }
+    cands.forEach(function(name, i){
+      var url = fp(name);
+      var probe = new Image();
+      probe.onload = function(){ results[i] = url; settled++; collect(); };
+      probe.onerror = function(){ results[i] = null; settled++;
+        if(settled === cands.length && loaded.length === 0){ pillText.textContent = 'photos unavailable'; }
+      };
+      probe.src = url;
+    });
+  });
+})();
+</script>
+</body>
+</html>
