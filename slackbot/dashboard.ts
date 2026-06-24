@@ -78,6 +78,8 @@ export async function gatherDashboardData(mcp: any, startISO: string | undefined
     id: p.id,
     title: p.title,
     color: p.color || "#C0C0C4",
+    customer: null as string | null,
+    customerRef: (Array.isArray(p.customers) && p.customers[0]) ? p.customers[0] : null,
     revenue: num(p.external_budget?.amount) || num(p.price?.amount) || 0,
     spent: num(p.external_budget_spent?.amount),
     remaining: num(p.external_budget_remaining?.amount),
@@ -85,6 +87,41 @@ export async function gatherDashboardData(mcp: any, startISO: string | undefined
     end: p.end_date || null,
     marginPct: typeof p.margin_percentage === "number" ? p.margin_percentage : null,
   }));
+
+  // Resolve each project's customer (company or contact) to a readable client name,
+  // so the day view can label cards by client instead of by task.
+  const custName: Record<string, string> = {};
+  const uniqueCust = Array.from(
+    new Map(
+      projects
+        .map((p: any) => p.customerRef)
+        .filter(Boolean)
+        .map((c: any) => [c.type + ":" + c.id, c])
+    ).values()
+  ) as any[];
+  for (let i = 0; i < uniqueCust.length; i += 8) {
+    const chunk = uniqueCust.slice(i, i + 8);
+    await Promise.all(
+      chunk.map(async (c: any) => {
+        const key = c.type + ":" + c.id;
+        try {
+          if (c.type === "company") {
+            const r = await tl(mcp, "get_company", { id: c.id });
+            custName[key] = (r.data?.name || "").trim();
+          } else if (c.type === "contact") {
+            const r = await tl(mcp, "get_contact", { id: c.id });
+            custName[key] = `${r.data?.first_name || ""} ${r.data?.last_name || ""}`.trim();
+          }
+        } catch {
+          /* leave unresolved; the view falls back to the project title */
+        }
+      })
+    );
+  }
+  projects.forEach((p: any) => {
+    if (p.customerRef) p.customer = custName[p.customerRef.type + ":" + p.customerRef.id] || null;
+    delete p.customerRef;
+  });
 
   // Daily availability per user -> aggregate to weeks.
   const availR = await tl(mcp, "get_user_availability_daily", {
@@ -276,6 +313,7 @@ td.day{text-align:left;vertical-align:top;min-width:120px;white-space:normal;pad
 .chip{border-left:4px solid #999;border-radius:5px;padding:3px 6px;margin:2px 0;line-height:1.25}
 .chip .ct{display:block;font-size:11.5px}
 .chip .ch{font-size:11px;color:#4d4c47;font-weight:600}
+.chip .cs{display:block;font-size:10.5px;color:#6b6a64}
 .chip .flag{color:#b3261e;font-weight:700}
 .cell-empty{color:#cbc9bf}
 .daycell{cursor:pointer}
@@ -317,6 +355,8 @@ td.fin-name{text-align:left;font-weight:600;min-width:200px}
   <span><label>Person</label><select id="person"><option value="all">Everyone</option></select></span>
   <span><label>Project</label><select id="project"><option value="all">All projects</option></select></span>
   <span><label>Capacity as</label><span class="seg"><button id="mh" class="on">Hours</button><button id="mp">%</button></span></span>
+  <span><label>Group by</label><span class="seg"><button id="vp" class="on">Person</button><button id="vj">Project</button></span></span>
+  <span><label>Card shows</label><span class="seg"><button id="lt" class="on">Task</button><button id="lc">Client</button></span></span>
 </div>
 
 <div id="msg">Loading live data…</div>
@@ -359,7 +399,7 @@ td.fin-name{text-align:left;font-weight:600;min-width:200px}
 <script>
 (function(){
   var KEY = new URLSearchParams(location.search).get('key') || '';
-  var state = { weeks: 6, person: 'all', project: 'all', mode: 'hours', data: null };
+  var state = { weeks: 6, person: 'all', project: 'all', mode: 'hours', view: 'person', label: 'task', data: null };
   var $ = function(id){ return document.getElementById(id); };
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   function hrs(h){ return (Math.round(h*10)/10) + 'h'; }
@@ -368,6 +408,7 @@ td.fin-name{text-align:left;font-weight:600;min-width:200px}
 
   function projMap(){ var m={}; (state.data.projects||[]).forEach(function(p){ m[p.id]=p; }); return m; }
   function userMap(){ var m={}; (state.data.users||[]).forEach(function(u){ m[u.id]=u.name; }); return m; }
+  function clientOf(p){ return (p&&p.customer)?p.customer:(p?p.title:'(client)'); }
 
   function visibleUsers(){
     var us = state.data.users || [];
@@ -407,7 +448,9 @@ td.fin-name{text-align:left;font-weight:600;min-width:200px}
     return m;
   }
 
-  function renderGrid(){
+  function renderGrid(){ if(state.view==='project') renderGridByProject(); else renderGridByPerson(); }
+
+  function renderGridByPerson(){
     var d=state.data, us=visibleUsers(), days=d.days, pm=projMap(), bd=blocksByUserDay();
     var h='<thead><tr><th class="name">Person</th>';
     days.forEach(function(dy){ var isWk=d.weekStarts.indexOf(dy)>=0; h+='<th class="'+(isWk?'wk':'')+'">'+esc(dlabel(dy))+'</th>'; });
@@ -422,9 +465,10 @@ td.fin-name{text-align:left;font-weight:600;min-width:200px}
         if(!list.length){ inner='<span class="cell-empty">·</span>'; }
         else{
           list.forEach(function(b){
-            var p=pm[b.projectId]||{title:'(unknown project)',color:'#C0C0C4'};
-            inner+='<div class="chip" style="border-left-color:'+esc(p.color)+';background:'+esc(p.color)+'1f" title="'+esc(p.title)+'">'
-              +'<span class="ct">'+esc(b.taskTitle)+'</span>'
+            var p=pm[b.projectId]||{title:'(unknown project)',color:'#C0C0C4',customer:null};
+            var main = state.label==='client' ? clientOf(p) : b.taskTitle;
+            inner+='<div class="chip" style="border-left-color:'+esc(p.color)+';background:'+esc(p.color)+'1f" title="'+esc(p.title)+(p.customer?(' — '+esc(p.customer)):'')+'">'
+              +'<span class="ct">'+esc(main)+'</span>'
               +'<span class="ch">'+hrs(b.hours)+(b.outOfRange?' <span class="flag" title="Outside the task date window">⚠</span>':'')+'</span></div>';
           });
         }
@@ -433,19 +477,84 @@ td.fin-name{text-align:left;font-weight:600;min-width:200px}
       h+='</tr>';
     });
     h+='</tbody>'; $('grid').innerHTML=h;
+    bindDrill();
+  }
+
+  function blocksByProjectDay(){
+    var m={};
+    (state.data.blocks||[]).forEach(function(b){
+      if(state.project!=='all' && b.projectId!==state.project) return;
+      if(state.person!=='all' && b.userId!==state.person) return;
+      var k=(b.projectId||'none')+'|'+b.date; (m[k]=m[k]||[]).push(b);
+    });
+    return m;
+  }
+
+  function visibleProjects(){
+    var pm=projMap(), ids={};
+    (state.data.blocks||[]).forEach(function(b){
+      if(state.project!=='all' && b.projectId!==state.project) return;
+      if(state.person!=='all' && b.userId!==state.person) return;
+      if(b.projectId) ids[b.projectId]=true;
+    });
+    var list=Object.keys(ids).map(function(id){ return pm[id]||{id:id,title:'(unknown project)',color:'#C0C0C4',customer:null}; });
+    list.sort(function(a,b){ return a.title<b.title?-1:1; });
+    return list;
+  }
+
+  function renderGridByProject(){
+    var d=state.data, days=d.days, um=userMap(), bd=blocksByProjectDay(), ps=visibleProjects();
+    var h='<thead><tr><th class="name">Project</th>';
+    days.forEach(function(dy){ var isWk=d.weekStarts.indexOf(dy)>=0; h+='<th class="'+(isWk?'wk':'')+'">'+esc(dlabel(dy))+'</th>'; });
+    h+='</tr></thead><tbody>';
+    if(!ps.length){ h+='<tr><td class="name">—</td><td>no planned work in this window</td></tr>'; }
+    ps.forEach(function(p){
+      var laneName = state.label==='client' ? clientOf(p) : p.title;
+      h+='<tr><td class="name" title="'+esc(p.title)+(p.customer?(' — '+esc(p.customer)):'')+'"><span class="dot" style="background:'+esc(p.color)+'"></span>'+esc(laneName)+'</td>';
+      days.forEach(function(dy){
+        var isWk=d.weekStarts.indexOf(dy)>=0;
+        var list=bd[p.id+'|'+dy]||[];
+        var inner='';
+        if(!list.length){ inner='<span class="cell-empty">·</span>'; }
+        else{
+          list.forEach(function(b){
+            inner+='<div class="chip" style="border-left-color:'+esc(p.color)+';background:'+esc(p.color)+'1f" title="'+esc(b.taskTitle)+'">'
+              +'<span class="ct">'+esc(um[b.userId]||'?')+'</span>'
+              +'<span class="ch">'+hrs(b.hours)+(b.outOfRange?' <span class="flag" title="Outside the task date window">⚠</span>':'')+'</span>'
+              +'<span class="cs">'+esc(b.taskTitle)+'</span></div>';
+          });
+        }
+        h+='<td class="day daycell'+(isWk?' wk':'')+'" data-pid="'+esc(p.id)+'" data-d="'+esc(dy)+'">'+inner+'</td>';
+      });
+      h+='</tr>';
+    });
+    h+='</tbody>'; $('grid').innerHTML=h;
+    bindDrill();
+  }
+
+  function bindDrill(){
     var cells=$('grid').querySelectorAll('.daycell');
     for(var i=0;i<cells.length;i++){ cells[i].addEventListener('click', onDrill); }
   }
 
   function onDrill(e){
-    var td=e.currentTarget, uid=td.getAttribute('data-u'), dy=td.getAttribute('data-d');
+    var td=e.currentTarget, dy=td.getAttribute('data-d');
+    var uid=td.getAttribute('data-u'), pid=td.getAttribute('data-pid');
     var pm=projMap(), um=userMap();
-    var list=(state.data.blocks||[]).filter(function(b){ return b.userId===uid && b.date===dy && (state.project==='all'||b.projectId===state.project); });
+    var list, title;
+    if(pid){
+      list=(state.data.blocks||[]).filter(function(b){ return b.projectId===pid && b.date===dy && (state.person==='all'||b.userId===state.person); });
+      var pp=pm[pid]||{title:'(unknown)'}; title=esc(pp.title)+(pp.customer?(' · '+esc(pp.customer)):'')+' · '+esc(dlabel(dy));
+    } else {
+      list=(state.data.blocks||[]).filter(function(b){ return b.userId===uid && b.date===dy && (state.project==='all'||b.projectId===state.project); });
+      title=esc(um[uid]||uid)+' · '+esc(dlabel(dy));
+    }
     var total=0; list.forEach(function(b){ total+=b.hours; });
-    var h='<h3>'+esc(um[uid]||uid)+' · '+esc(dlabel(dy))+'</h3>';
+    var h='<h3>'+title+'</h3>';
     if(!list.length){ h+='<div class="row">No reservations.</div>'; }
-    list.forEach(function(b){ var p=pm[b.projectId]||{title:'(unknown)',color:'#999'};
-      h+='<div class="row"><span class="dot" style="background:'+esc(p.color)+'"></span>'+esc(b.taskTitle)+' — '+hrs(b.hours)+' <span style="color:#8a897f">('+esc(p.title)+')</span>'+(b.outOfRange?' <span style="color:#b3261e">⚠ out of range</span>':'')+'</div>'; });
+    list.forEach(function(b){ var p=pm[b.projectId]||{title:'(unknown)',color:'#999',customer:null};
+      var who = pid ? esc(um[b.userId]||b.userId)+' — ' : '';
+      h+='<div class="row"><span class="dot" style="background:'+esc(p.color)+'"></span>'+who+esc(b.taskTitle)+' — '+hrs(b.hours)+' <span style="color:#8a897f">('+esc(p.customer||p.title)+')</span>'+(b.outOfRange?' <span style="color:#b3261e">⚠ out of range</span>':'')+'</div>'; });
     if(list.length){ h+='<div class="row" style="font-weight:600">Total: '+hrs(total)+'</div>'; }
     $('drillbody').innerHTML=h; $('drill').style.display='block';
   }
@@ -551,6 +660,10 @@ td.fin-name{text-align:left;font-weight:600;min-width:200px}
   $('project').addEventListener('change', function(){ state.project=this.value; renderAll(); });
   $('mh').addEventListener('click', function(){ state.mode='hours'; $('mh').classList.add('on'); $('mp').classList.remove('on'); renderCap(); });
   $('mp').addEventListener('click', function(){ state.mode='pct'; $('mp').classList.add('on'); $('mh').classList.remove('on'); renderCap(); });
+  $('vp').addEventListener('click', function(){ state.view='person'; $('vp').classList.add('on'); $('vj').classList.remove('on'); renderGrid(); });
+  $('vj').addEventListener('click', function(){ state.view='project'; $('vj').classList.add('on'); $('vp').classList.remove('on'); renderGrid(); });
+  $('lt').addEventListener('click', function(){ state.label='task'; $('lt').classList.add('on'); $('lc').classList.remove('on'); renderGrid(); });
+  $('lc').addEventListener('click', function(){ state.label='client'; $('lc').classList.add('on'); $('lt').classList.remove('on'); renderGrid(); });
 
   load();
 })();
