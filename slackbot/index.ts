@@ -853,10 +853,20 @@ async function main(): Promise<void> {
   ): Promise<string> {
     const history = threadHistory.get(convoKey) ?? [];
     const messages: Anthropic.MessageParam[] = [...history, { role: "user", content: userText }];
-    const system =
-      identity && (identity.email || identity.name)
-        ? `${SYSTEM_PROMPT}\n\nWho you are talking to right now: ${identity.name || "a Peak Nine teammate"}${identity.email ? ` (${identity.email})` : ""}. When they say "me", "my", "my agenda" or "my calendar", that means THIS person and THIS email — use their email directly as calendar_email for the gcal_* tools (and as the person for "my" tasks) without asking which calendar, unless they explicitly name someone else.`
-        : SYSTEM_PROMPT;
+    // System is split into two blocks so the big static prompt (and the tools before it)
+    // form a stable, cacheable prefix that is shared across users and reused on every loop
+    // step. The cache breakpoint sits on the static block; the per-user identity line goes
+    // AFTER it, so it never changes the cached prefix. Prompt caching then charges 10% of
+    // input price whenever this prefix is reused within the cache window.
+    const system: Anthropic.TextBlockParam[] = [
+      { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+    ];
+    if (identity && (identity.email || identity.name)) {
+      system.push({
+        type: "text",
+        text: `Who you are talking to right now: ${identity.name || "a Peak Nine teammate"}${identity.email ? ` (${identity.email})` : ""}. When they say "me", "my", "my agenda" or "my calendar", that means THIS person and THIS email — use their email directly as calendar_email for the gcal_* tools (and as the person for "my" tasks) without asking which calendar, unless they explicitly name someone else.`,
+      });
+    }
 
     let finalText = "";
     for (let step = 0; step < 16; step++) {
@@ -870,6 +880,14 @@ async function main(): Promise<void> {
         },
         { timeout: 150000 }
       );
+
+      // Prompt-cache visibility: high read vs write means the cached prefix is being reused.
+      const cu = resp.usage as any;
+      if (cu) {
+        console.log(
+          `[cache] read=${cu.cache_read_input_tokens ?? 0} write=${cu.cache_creation_input_tokens ?? 0} fresh_input=${cu.input_tokens ?? 0} output=${cu.output_tokens ?? 0}`
+        );
+      }
 
       if (resp.stop_reason === "tool_use") {
         messages.push({ role: "assistant", content: resp.content });
