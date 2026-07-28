@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenTeleRehab Cambodia — WP1 Field Validation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F2EAE0;
+    --bg-deep:#EDE2D3;
+    --card:#FFFFFF;
+    --card-soft:#FBF7EF;
+    --ink:#1B1712;
+    --ink-soft:#5A5346;
+    --muted:#948A78;
+    --line:#E4D6C2;
+    --yellow:#FFDE21;
+    --yellow-deep:#F2C900;
+    --yellow-pale:#FFF3B8;
+    --red:#D24B3E;
+    --orange:#E08A2E;
+    --green:#4C8B5E;
+    --r-lg:22px;
+    --r-md:16px;
+    --r-sm:10px;
+    --shadow: none;
+    --step-w: 252px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+  h1,h2,h3,.display{font-family:'Space Grotesk',system-ui,sans-serif;}
+  button{font-family:inherit;cursor:pointer;}
+  textarea, input[type=text]{font-family:inherit;}
+  ::-webkit-scrollbar{height:10px;width:10px;}
+  ::-webkit-scrollbar-thumb{background:var(--line);border-radius:10px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+
+  /* ---------- layout shell ---------- */
+  #app{max-width:1600px;margin:0 auto;padding:28px 32px 80px;}
+
+  .topbar{
+    display:flex;align-items:flex-start;justify-content:space-between;
+    gap:24px;flex-wrap:wrap;margin-bottom:26px;
+  }
+  .brand{display:flex;gap:14px;align-items:flex-start;}
+  .brand-mark{
+    width:14px;height:14px;border-radius:50%;background:var(--yellow);
+    margin-top:9px;flex:none;
+    box-shadow:0 0 0 5px var(--yellow-pale);
+  }
+  .brand h1{font-size:24px;margin:0 0 4px;font-weight:700;letter-spacing:-0.01em;}
+  .brand p{margin:0;color:var(--ink-soft);font-size:14px;}
+
+  .tabs{display:flex;gap:6px;background:var(--card-soft);padding:5px;border-radius:999px;border:1px solid var(--line);}
+  .tab{
+    border:none;background:transparent;padding:10px 20px;border-radius:999px;
+    font-size:14px;font-weight:600;color:var(--ink-soft);transition:background .15s ease,color .15s ease;
+  }
+  .tab.active{background:var(--ink);color:var(--bg);}
+  .tab:not(.active):hover{background:var(--yellow-pale);color:var(--ink);}
+
+  .view{display:none;}
+  .view.active{display:block;animation:fadein .18s ease;}
+  @keyframes fadein{from{opacity:0}to{opacity:1}}
+
+  /* ---------- generic card ---------- */
+  .surface{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+    text-transform:uppercase;letter-spacing:.04em;padding:4px 10px;border-radius:999px;
+  }
+  .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+  .dot.red{background:var(--red);} .dot.orange{background:var(--orange);} .dot.green{background:var(--green);} .dot.yellow{background:var(--yellow-deep);}
+
+  /* ---------- SECTION 1 : main insights ---------- */
+  .section-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px;}
+  .section-head h2{font-size:19px;margin:0;}
+  .section-head .hint{color:var(--muted);font-size:13px;}
+
+  .insights-grid{
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;
+  }
+  .insight-card{
+    background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);
+    padding:20px;cursor:pointer;transition:border-color .15s ease, transform .1s ease;
+    display:flex;flex-direction:column;gap:14px;min-height:150px;
+  }
+  .insight-card:hover{border-color:var(--yellow-deep);transform:translateY(-2px);}
+  .insight-card h3{font-size:15.5px;font-weight:600;margin:0;line-height:1.4;}
+  .insight-card .footer-row{display:flex;align-items:center;justify-content:space-between;margin-top:auto;}
+  .conf-badge{background:var(--card-soft);}
+  .rada-tag{font-size:11.5px;color:var(--muted);font-weight:600;}
+  .rada-tag.agree{color:var(--green);}
+  .rada-tag.partial{color:var(--orange);}
+  .rada-tag.disagree{color:var(--red);}
+  .add-insight-card{
+    border:2px dashed var(--line);border-radius:var(--r-lg);display:flex;align-items:center;justify-content:center;
+    color:var(--muted);font-weight:600;min-height:150px;transition:border-color .15s,color .15s;
+  }
+  .add-insight-card:hover{border-color:var(--yellow-deep);color:var(--ink);}
+
+  /* ---------- SECTION 2+ : journey workspace ---------- */
+  .journey-toolbar{
+    display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;
+    margin-bottom:16px;
+  }
+  .layer-switch{display:flex;gap:6px;background:var(--card-soft);border:1px solid var(--line);padding:5px;border-radius:999px;}
+  .layer-btn{border:none;background:transparent;padding:9px 18px;border-radius:999px;font-size:13.5px;font-weight:600;color:var(--ink-soft);}
+  .layer-btn.active{background:var(--yellow);color:var(--ink);}
+  .layer-btn:not(.active):hover{background:#fff;}
+  .ghost-btn{
+    border:1px solid var(--line);background:var(--card);padding:9px 16px;border-radius:999px;
+    font-size:13px;font-weight:600;color:var(--ink);transition:background .15s;
+  }
+  .ghost-btn:hover{background:var(--yellow-pale);border-color:var(--yellow-deep);}
+  .ghost-btn.small{padding:6px 12px;font-size:12.5px;}
+
+  .journey-strip-wrap{
+    overflow-x:auto;padding-bottom:10px;margin-bottom:6px;
+  }
+  .journey-strip{display:flex;gap:12px;min-width:max-content;}
+  .step-card{
+    width:var(--step-w);flex:none;background:var(--card);border:1px solid var(--line);
+    border-radius:var(--r-md);padding:14px;position:relative;
+  }
+  .step-index{
+    display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
+    border-radius:50%;background:var(--yellow);font-size:11px;font-weight:700;margin-bottom:8px;
+  }
+  .step-title-input{
+    width:100%;border:none;background:transparent;font-family:'Space Grotesk',sans-serif;
+    font-size:14.5px;font-weight:600;color:var(--ink);padding:0;margin-bottom:8px;resize:none;line-height:1.3;
+  }
+  .step-title-input:focus{outline:none;}
+  .step-notes{
+    width:100%;border:none;background:var(--card-soft);border-radius:var(--r-sm);padding:8px;
+    font-size:12px;color:var(--ink-soft);min-height:44px;resize:vertical;line-height:1.4;
+  }
+  .step-notes:focus{outline:1.5px solid var(--yellow-deep);}
+  .step-notes-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:700;margin-bottom:5px;display:block;}
+  .step-controls{display:flex;gap:6px;position:absolute;top:12px;right:10px;}
+  .icon-btn{
+    border:none;background:transparent;color:var(--muted);width:20px;height:20px;border-radius:6px;
+    display:flex;align-items:center;justify-content:center;font-size:13px;line-height:1;
+  }
+  .icon-btn:hover{background:var(--yellow-pale);color:var(--ink);}
+  .add-step-card{
+    width:120px;flex:none;border:2px dashed var(--line);border-radius:var(--r-md);
+    display:flex;align-items:center;justify-content:center;color:var(--muted);font-weight:600;font-size:13px;
+  }
+  .add-step-card:hover{border-color:var(--yellow-deep);color:var(--ink);}
+
+  .overlay-area{margin-top:22px;}
+
+  /* stakeholder table */
+  .stake-table-wrap{overflow-x:auto;}
+  table.stake-table{border-collapse:separate;border-spacing:0;width:100%;min-width:900px;}
+  table.stake-table th, table.stake-table td{border-bottom:1px solid var(--line);padding:0;}
+  table.stake-table thead th{
+    text-align:left;font-size:12px;font-weight:700;color:var(--ink-soft);padding:10px 12px;
+    background:var(--card-soft);position:sticky;top:0;
+  }
+  table.stake-table thead th:first-child{position:sticky;left:0;z-index:3;background:var(--card-soft);}
+  table.stake-table tbody th{
+    text-align:left;font-size:13px;font-weight:700;padding:12px;white-space:nowrap;
+    background:var(--card);position:sticky;left:0;z-index:2;border-right:1px solid var(--line);
+  }
+  table.stake-table td{padding:6px;min-width:150px;}
+  .stake-cell{
+    border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 10px;min-height:56px;
+    cursor:pointer;background:var(--card);transition:background .12s, border-color .12s;
+  }
+  .stake-cell:hover{border-color:var(--yellow-deep);}
+  .stake-cell.involved{background:var(--yellow-pale);border-color:var(--yellow-deep);}
+  .stake-cell .role{font-size:12px;font-weight:600;color:var(--ink);}
+  .stake-cell .role.empty{color:var(--muted);font-weight:500;}
+  .stake-cell .snote{font-size:11px;color:var(--ink-soft);margin-top:3px;display:block;}
+
+  /* pain point / opportunity columns */
+  .col-board{display:flex;gap:12px;min-width:max-content;}
+  .col{width:var(--step-w);flex:none;}
+  .col-head{
+    font-size:11.5px;font-weight:700;color:var(--ink-soft);padding:0 4px 8px;
+    text-transform:uppercase;letter-spacing:.03em;min-height:32px;
+  }
+  .col-stack{display:flex;flex-direction:column;gap:10px;min-height:40px;padding:2px;border-radius:var(--r-md);transition:background .12s;}
+  .col-stack.dragover{background:var(--yellow-pale);}
+  .item-card{
+    background:var(--card);border:1px solid var(--line);border-radius:var(--r-md);padding:12px;
+    cursor:grab;
+  }
+  .item-card.dragging{opacity:.4;}
+  .item-card .top-row{display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:6px;}
+  .item-title-input{
+    border:none;background:transparent;font-weight:600;font-size:13.5px;width:100%;padding:0;font-family:'Space Grotesk',sans-serif;
+  }
+  .item-title-input:focus{outline:none;}
+  .item-desc{
+    width:100%;border:none;background:transparent;font-size:12px;color:var(--ink-soft);resize:none;
+    padding:0;line-height:1.4;min-height:32px;
+  }
+  .item-desc:focus{outline:none;}
+  .item-notes{
+    width:100%;border:none;background:var(--card-soft);border-radius:var(--r-sm);font-size:11.5px;
+    padding:7px;margin-top:8px;min-height:34px;resize:vertical;color:var(--ink-soft);
+  }
+  .item-notes:focus{outline:1.5px solid var(--yellow-deep);}
+  .item-footer{display:flex;align-items:center;justify-content:space-between;margin-top:8px;gap:6px;}
+  .imp-select{
+    font-size:10.5px;font-weight:700;text-transform:uppercase;border:none;background:transparent;
+    color:var(--ink-soft);padding:2px 0;
+  }
+  .move-select{font-size:10.5px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink-soft);padding:2px 4px;max-width:88px;}
+  .add-item-btn{
+    width:100%;border:1.5px dashed var(--line);background:transparent;border-radius:var(--r-md);
+    padding:10px;font-size:12px;font-weight:600;color:var(--muted);margin-top:2px;
+  }
+  .add-item-btn:hover{border-color:var(--yellow-deep);color:var(--ink);}
+
+  /* ---------- modal ---------- */
+  .modal-backdrop{
+    position:fixed;inset:0;background:rgba(27,23,18,.45);display:flex;align-items:center;justify-content:center;
+    z-index:50;padding:20px;
+  }
+  .modal{
+    background:var(--card);border-radius:var(--r-lg);max-width:560px;width:100%;max-height:88vh;overflow-y:auto;
+    padding:26px;position:relative;
+  }
+  .modal-close{
+    position:absolute;top:16px;right:16px;border:none;background:var(--card-soft);width:30px;height:30px;
+    border-radius:50%;font-size:15px;color:var(--ink-soft);
+  }
+  .modal-close:hover{background:var(--yellow-pale);color:var(--ink);}
+  .modal h3{margin:0 24px 14px 0;font-size:18px;}
+  .modal label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:16px 0 6px;}
+  .modal label:first-of-type{margin-top:4px;}
+  .modal textarea, .modal select, .modal input[type=text]{
+    width:100%;border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;font-size:13.5px;
+    background:var(--card-soft);color:var(--ink);
+  }
+  .modal textarea{min-height:70px;resize:vertical;line-height:1.5;}
+  .modal textarea:focus, .modal select:focus, .modal input:focus{outline:1.5px solid var(--yellow-deep);}
+  .seg{display:flex;gap:6px;flex-wrap:wrap;}
+  .seg button{
+    flex:1;border:1px solid var(--line);background:var(--card-soft);padding:9px 10px;border-radius:var(--r-sm);
+    font-size:12.5px;font-weight:600;color:var(--ink-soft);white-space:nowrap;
+  }
+  .seg button.active{background:var(--yellow);border-color:var(--yellow-deep);color:var(--ink);}
+  .modal-delete{
+    margin-top:22px;border:none;background:transparent;color:var(--red);font-weight:600;font-size:13px;padding:0;
+  }
+  .modal-delete:hover{text-decoration:underline;}
+
+  .footer-note{margin-top:40px;color:var(--muted);font-size:12px;text-align:center;}
+
+  @media (max-width:720px){
+    #app{padding:18px 16px 60px;}
+    .brand h1{font-size:20px;}
+    .insights-grid{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div>
+        <h1>OpenTeleRehab — Cambodia</h1>
+        <p>WP1 field validation workspace · live session with RADA</p>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-view="insights">Main insights</button>
+      <button class="tab" data-view="journey">Journey workspace</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="view-insights" class="view active">
+      <div class="section-head">
+        <h2>Main insights from desk research</h2>
+        <span class="hint">Click a card to validate, correct or enrich it with RADA</span>
+      </div>
+      <div class="insights-grid" id="insightsGrid"></div>
+    </section>
+
+    <section id="view-journey" class="view">
+      <div class="journey-toolbar">
+        <div class="layer-switch" id="layerSwitch">
+          <button class="layer-btn active" data-layer="stakeholders">Stakeholders</button>
+          <button class="layer-btn" data-layer="painpoints">Pain points</button>
+          <button class="layer-btn" data-layer="opportunities">Opportunities</button>
+        </div>
+        <button class="ghost-btn" id="addStepBtn">+ Add journey step</button>
+      </div>
+
+      <div class="journey-strip-wrap">
+        <div class="journey-strip" id="journeyStrip"></div>
+      </div>
+
+      <div class="overlay-area" id="overlayArea"></div>
+    </section>
+  </main>
+
+  <p class="footer-note">Everything here is editable during the interview — notes, cards and the journey itself. Nothing is a final conclusion.</p>
+</div>
+
+<div id="modalRoot"></div>
+
+<!-- Persistence bridge: gives the app a window.storage backed by Pidgi's server, so
+     every saveState()/loadState() call persists to a file on the host. No app code changes. -->
+<script>
+(function(){
+  var FORM_ID = "otr-wp1";
+  var KEY = new URLSearchParams(location.search).get("key") || "";
+  var base = "/form/" + FORM_ID;
+  var badge = null;
+  function flash(text, ok){
+    if(!badge){
+      badge = document.createElement("div");
+      badge.style.cssText = "position:fixed;bottom:14px;right:16px;font:600 12px Inter,system-ui,sans-serif;padding:7px 12px;border-radius:999px;z-index:99999;opacity:0;transition:opacity .25s;color:#1B1712;background:#FFDE21";
+      document.addEventListener("DOMContentLoaded", function(){ document.body.appendChild(badge); });
+      if(document.body) document.body.appendChild(badge);
+    }
+    badge.textContent = text;
+    badge.style.background = ok === false ? "#D24B3E" : "#FFDE21";
+    badge.style.color = ok === false ? "#fff" : "#1B1712";
+    badge.style.opacity = "1";
+    clearTimeout(badge._t);
+    badge._t = setTimeout(function(){ badge.style.opacity = "0"; }, 1400);
+  }
+  window.storage = {
+    get: function(k){
+      return fetch(base + "/data?key=" + encodeURIComponent(KEY))
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(j){ return (j && typeof j.value === "string") ? { value: j.value } : null; })
+        .catch(function(){ return null; });
+    },
+    set: function(k, value){
+      flash("Saving…", true);
+      return fetch(base + "/save?key=" + encodeURIComponent(KEY), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: String(value) })
+      }).then(function(r){
+        if(!r.ok) throw new Error("HTTP " + r.status);
+        flash("Saved ✓", true);
+        return true;
+      }).catch(function(){ flash("Save failed", false); return false; });
+    }
+  };
+})();
+</script>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============================================================
+     STATE — seeded from the Peak Nine desk research deck
+     ============================================================ */
+  let idCounter = 1000;
+  function nid(prefix){ idCounter++; return prefix + "_" + idCounter; }
+
+  const defaultState = {
+    insights: [
+      { id:"ins_1", title:"PHCs are more likely to become rehabilitation gateways than rehabilitation providers",
+        explanation:"Cambodia's health strategic plan mentions rehabilitation mainly within medico-social and long-term care, not as a defined health-centre service. Pakistan evidence shows PHC staff can deliver basic rehabilitation while referring complex cases onward.",
+        confidence:"Strong signal", notes:"", rada:"" },
+      { id:"ins_2", title:"Community actors (VHSGs, caregivers, village leaders) are critical enablers",
+        explanation:"Village Health Support Groups and family caregivers are often the first point of contact, facilitate referrals and support follow-up. They are recognised in Cambodia's national health system, not only informal helpers.",
+        confidence:"Strong signal", notes:"", rada:"" },
+      { id:"ins_3", title:"Follow-up is a bigger challenge than referral",
+        explanation:"Across Pakistan evidence and Cambodian prosthetics data, patients drop out after referral or first treatment more often than they fail to be referred at all. Median time before first repair was 237 days, before replacement 727 days.",
+        confidence:"Well supported", notes:"", rada:"" },
+      { id:"ins_4", title:"Specialists remain essential for supervision and complex cases",
+        explanation:"PHC providers understood where their role ended and referred complex patients onward. Remote specialist supervision (e.g. via WhatsApp mentoring) was as important as PHC training itself.",
+        confidence:"Well supported", notes:"", rada:"" },
+      { id:"ins_5", title:"Digital tools support workflows rather than replace them",
+        explanation:"Simple tools (like WhatsApp groups for mentoring and referral) outperformed complex platforms in comparable contexts. OTR should fit existing PHC workflows rather than add parallel tasks.",
+        confidence:"Strong signal", notes:"", rada:"" },
+      { id:"ins_6", title:"Training alone is not enough — mentorship and supervision are needed",
+        explanation:"PHC staff only integrated rehabilitation into routine care when training was combined with refresher sessions and supportive supervision. Training alone did not make it stick.",
+        confidence:"Well supported", notes:"", rada:"" },
+      { id:"ins_7", title:"VHSGs could become a key rehabilitation access point",
+        explanation:"This mirrors Pakistan's Lady Health Workers, who identified patients and drove word-of-mouth demand. Whether Cambodian VHSGs can play the same role is a Cambodia-specific hypothesis, not yet confirmed.",
+        confidence:"Hypothesis", notes:"", rada:"" },
+      { id:"ins_8", title:"Government integration and ownership will determine long-term scale",
+        explanation:"Stakeholders in comparable contexts consistently argued rehabilitation only scales if it becomes part of government systems — financing, reporting (e.g. DHIS) and workforce planning.",
+        confidence:"Strong signal", notes:"", rada:"" }
+    ],
+
+    steps: [
+      { id:"st_1", title:"Rehabilitation need emerges", notes:"How do people realise they may need rehabilitation?" },
+      { id:"st_2", title:"Someone recognises the need", notes:"Who usually notices rehabilitation needs first?" },
+      { id:"st_3", title:"Patient decides to seek help", notes:"Why do some people never seek rehabilitation?" },
+      { id:"st_4", title:"First contact with community or PHC", notes:"Is rehabilitation currently discussed at PHCs?" },
+      { id:"st_5", title:"Assessment / need identified at PHC", notes:"Can Cambodian PHC staff recognise rehabilitation needs today?" },
+      { id:"st_6", title:"Referral or connection to PRC", notes:"How are referrals currently made and monitored?" },
+      { id:"st_7", title:"First rehabilitation contact", notes:"What proportion of referred patients actually attend a PRC?" },
+      { id:"st_8", title:"Rehabilitation at home", notes:"How do patients currently continue rehabilitation at home?" },
+      { id:"st_9", title:"Follow up", notes:"Who currently follows up with patients after rehabilitation?" },
+      { id:"st_10", title:"Return, repair or escalation", notes:"How are patients brought back into care when needs change?" }
+    ],
+
+    stakeholders: [
+      { id:"sh_patient", name:"Patient" },
+      { id:"sh_caregiver", name:"Caregiver / family" },
+      { id:"sh_vhsg", name:"VHSG" },
+      { id:"sh_chief", name:"Village chief" },
+      { id:"sh_phcworker", name:"PHC worker" },
+      { id:"sh_phcmanager", name:"PHC manager / director" },
+      { id:"sh_prc", name:"PRC professional" },
+      { id:"sh_hi", name:"HI / NGO" },
+      { id:"sh_hospital", name:"Referral hospital" },
+      { id:"sh_authority", name:"Local authority" }
+    ],
+
+    // involvement[stepId][stakeholderId] = {involved, role, notes}
+    involvement: {
+      st_1:{ sh_patient:{involved:true, role:"Experiences the need", notes:""}, sh_caregiver:{involved:true, role:"Notices change in patient", notes:""} },
+      st_2:{ sh_vhsg:{involved:true, role:"Identifies need in community", notes:""}, sh_caregiver:{involved:true, role:"Flags concern", notes:""}, sh_phcworker:{involved:true, role:"May notice during other visits", notes:""}, sh_chief:{involved:true, role:"Community-level awareness", notes:""} },
+      st_3:{ sh_patient:{involved:true, role:"Weighs cost, trust, transport", notes:""}, sh_caregiver:{involved:true, role:"Influences decision", notes:""} },
+      st_4:{ sh_phcworker:{involved:true, role:"First clinical contact", notes:""}, sh_vhsg:{involved:true, role:"May accompany or refer", notes:""} },
+      st_5:{ sh_phcworker:{involved:true, role:"Assesses need", notes:"Confidence in Cambodia unknown"} },
+      st_6:{ sh_phcworker:{involved:true, role:"Initiates referral", notes:""}, sh_prc:{involved:true, role:"Receives referral", notes:""} },
+      st_7:{ sh_prc:{involved:true, role:"Delivers specialist rehab", notes:""}, sh_patient:{involved:true, role:"Attends session", notes:""} },
+      st_8:{ sh_patient:{involved:true, role:"Performs exercises", notes:""}, sh_caregiver:{involved:true, role:"Supports adherence", notes:""} },
+      st_9:{ sh_phcworker:{involved:true, role:"Potential follow-up point", notes:""}, sh_prc:{involved:true, role:"Potential follow-up point", notes:""}, sh_caregiver:{involved:true, role:"Reports issues", notes:""}, sh_vhsg:{involved:true, role:"Community follow-up", notes:""} },
+      st_10:{ sh_phcworker:{involved:true, role:"Re-entry point", notes:""}, sh_prc:{involved:true, role:"Handles escalation", notes:""}, sh_patient:{involved:true, role:"Returns to care", notes:""} }
+    },
+
+    painpoints: [
+      { id:"pp_1", stepId:"st_1", title:"Low awareness delays care-seeking", desc:"People do not recognise rehabilitation needs early, especially for chronic conditions.", importance:"Critical", notes:"" },
+      { id:"pp_2", stepId:"st_2", title:"Needs not consistently recognised", desc:"Rehab needs are noticed inconsistently and not clearly differentiated from other health issues.", importance:"Critical", notes:"" },
+      { id:"pp_3", stepId:"st_3", title:"Cost, transport and uncertainty delay decisions", desc:"Many patients delay seeking care because of practical barriers and trust in the system.", importance:"Critical", notes:"" },
+      { id:"pp_4", stepId:"st_4", title:"Rehab not yet part of PHC routine practice", desc:"Rehabilitation is not clearly embedded in PHC's day-to-day workflow.", importance:"Critical", notes:"" },
+      { id:"pp_5", stepId:"st_5", title:"Rehab confused with physiotherapy/orthopaedics", desc:"PHC staff may struggle to distinguish rehabilitation needs without specific training.", importance:"Critical", notes:"" },
+      { id:"pp_6", stepId:"st_6", title:"Referral doesn't guarantee arrival", desc:"Referral pathways exist but don't guarantee patients actually reach rehabilitation.", importance:"Critical", notes:"" },
+      { id:"pp_7", stepId:"st_7", title:"Travel, cost and distance reduce attendance", desc:"Specialist rehabilitation remains centred in PRCs, which are hard to reach.", importance:"Critical", notes:"" },
+      { id:"pp_8", stepId:"st_8", title:"Exercises hard to continue independently", desc:"Without support, patients struggle to keep up home exercises.", importance:"Critical", notes:"" },
+      { id:"pp_9", stepId:"st_9", title:"Patients drop out after referral", desc:"Follow-up is one of the weakest parts of the pathway; patients easily disengage.", importance:"Critical", notes:"" },
+      { id:"pp_10", stepId:"st_10", title:"No structured long-term monitoring", desc:"Continuity depends on ad hoc repairs and reassessment rather than a structured process.", importance:"High", notes:"" }
+    ],
+
+    opportunities: [
+      { id:"op_1", stepId:"st_1", title:"Community awareness", desc:"Simple awareness campaigns and screening to help people recognise rehab needs early.", notes:"" },
+      { id:"op_2", stepId:"st_2", title:"Simple identification tool", desc:"Lightweight tool for VHSGs and PHCs to flag possible rehabilitation needs.", notes:"" },
+      { id:"op_3", stepId:"st_3", title:"Assisted onboarding", desc:"Clear information and community-supported onboarding to reduce uncertainty.", notes:"" },
+      { id:"op_4", stepId:"st_4", title:"Rehabilitation screening", desc:"Introduce simple rehab screening as part of PHC routine practice.", notes:"" },
+      { id:"op_5", stepId:"st_5", title:"Decision support checklist", desc:"Simple assessment checklist to help PHC staff identify rehab needs confidently.", notes:"" },
+      { id:"op_6", stepId:"st_6", title:"Digital referral", desc:"Digital referral and tracking so patients don't fall through the cracks.", notes:"" },
+      { id:"op_7", stepId:"st_7", title:"Hybrid rehabilitation", desc:"Combine PRC sessions with remote follow-up to reduce travel burden.", notes:"" },
+      { id:"op_8", stepId:"st_8", title:"Home exercises", desc:"OpenTeleRehab guided home exercise programmes.", notes:"" },
+      { id:"op_9", stepId:"st_9", title:"Digital follow up", desc:"Digital follow-up combined with PHC and community support.", notes:"" },
+      { id:"op_10", stepId:"st_10", title:"Long-term monitoring", desc:"Digital monitoring and reminders for reassessment, repair or escalation.", notes:"" }
+    ]
+  };
+
+  let state = null;
+  let currentLayer = "stakeholders";
+  const STORAGE_KEY = "otr-cambodia-wp1-state-v1";
+
+  /* ============================================================
+     PERSISTENCE (best effort — safe if window.storage is absent)
+     ============================================================ */
+  function hasStorage(){ return typeof window !== "undefined" && window.storage && typeof window.storage.get === "function"; }
+
+  async function loadState(){
+    if(hasStorage()){
+      try{
+        const res = await window.storage.get(STORAGE_KEY, false);
+        if(res && res.value){
+          state = JSON.parse(res.value);
+          return;
+        }
+      }catch(e){ /* no saved state yet */ }
+    }
+    state = JSON.parse(JSON.stringify(defaultState));
+  }
+
+  let saveTimer = null;
+  function saveState(){
+    if(!hasStorage()) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      try{ await window.storage.set(STORAGE_KEY, JSON.stringify(state), false); }
+      catch(e){ /* ignore */ }
+    }, 400);
+  }
+
+  function mutate(fn){ fn(state); saveState(); }
+
+  /* ============================================================
+     HELPERS
+     ============================================================ */
+  function esc(s){ return (s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+  function confDot(conf){
+    if(conf==="Validated") return '<span class="dot green"></span>';
+    if(conf==="Strong signal") return '<span class="dot yellow"></span>';
+    if(conf==="Well supported") return '<span class="dot green"></span>';
+    return '<span class="dot orange"></span>';
+  }
+  function impDot(imp){
+    if(imp==="Critical") return '<span class="dot red"></span>';
+    if(imp==="High") return '<span class="dot orange"></span>';
+    if(imp==="Medium") return '<span class="dot yellow"></span>';
+    return '<span class="dot green"></span>';
+  }
+  function stepById(id){ return state.steps.find(s=>s.id===id); }
+
+  /* ============================================================
+     MODAL
+     ============================================================ */
+  function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
+  function openModal(html){
+    const root = document.getElementById("modalRoot");
+    root.innerHTML = `<div class="modal-backdrop" id="modalBackdrop"><div class="modal">${html}</div></div>`;
+    document.getElementById("modalBackdrop").addEventListener("click", (e)=>{ if(e.target.id==="modalBackdrop") closeModal(); });
+  }
+
+  function openInsightModal(id){
+    const ins = state.insights.find(i=>i.id===id);
+    if(!ins) return;
+    const confs = ["Hypothesis","Strong signal","Well supported","Validated"];
+    const radas = [["","Not discussed"],["agree","Agrees"],["partial","Partially agrees"],["disagree","Disagrees"]];
+    openModal(`
+      <button class="modal-close" data-action="close-modal">&times;</button>
+      <h3 contenteditable="true" data-action="edit-insight-title" data-id="${id}">${esc(ins.title)}</h3>
+      <label>Explanation</label>
+      <textarea data-action="edit-insight-field" data-field="explanation" data-id="${id}">${esc(ins.explanation)}</textarea>
+      <label>Current confidence</label>
+      <div class="seg" data-action="seg-conf" data-id="${id}">
+        ${confs.map(c=>`<button class="${ins.confidence===c?'active':''}" data-val="${c}">${c}</button>`).join("")}
+      </div>
+      <label>Notes captured during the interview</label>
+      <textarea data-action="edit-insight-field" data-field="notes" data-id="${id}" placeholder="Type notes live while talking with RADA...">${esc(ins.notes)}</textarea>
+      <label>Does RADA agree?</label>
+      <div class="seg" data-action="seg-rada" data-id="${id}">
+        ${radas.map(([v,l])=>`<button class="${ins.rada===v?'active':''}" data-val="${v}">${l}</button>`).join("")}
+      </div>
+      <button class="modal-delete" data-action="delete-insight" data-id="${id}">Delete this insight card</button>
+    `);
+  }
+
+  function openStakeCellModal(stepId, shId){
+    const step = stepById(stepId);
+    const sh = state.stakeholders.find(s=>s.id===shId);
+    if(!state.involvement[stepId]) state.involvement[stepId] = {};
+    if(!state.involvement[stepId][shId]) state.involvement[stepId][shId] = {involved:false, role:"", notes:""};
+    const cell = state.involvement[stepId][shId];
+    openModal(`
+      <button class="modal-close" data-action="close-modal">&times;</button>
+      <h3>${esc(sh.name)} <span style="color:var(--muted);font-weight:500;">→ ${esc(step.title)}</span></h3>
+      <label>Involved at this step?</label>
+      <div class="seg" data-action="seg-involved" data-step="${stepId}" data-sh="${shId}">
+        <button class="${cell.involved?'active':''}" data-val="yes">Yes, involved</button>
+        <button class="${!cell.involved?'active':''}" data-val="no">Not involved</button>
+      </div>
+      <label>Role at this step</label>
+      <input type="text" data-action="edit-cell-field" data-field="role" data-step="${stepId}" data-sh="${shId}" value="${esc(cell.role)}" placeholder="e.g. Identifies need in community">
+      <label>Notes from RADA</label>
+      <textarea data-action="edit-cell-field" data-field="notes" data-step="${stepId}" data-sh="${shId}" placeholder="Capture what RADA says...">${esc(cell.notes)}</textarea>
+    `);
+  }
+
+  /* ============================================================
+     RENDER: INSIGHTS
+     ============================================================ */
+  function renderInsights(){
+    const grid = document.getElementById("insightsGrid");
+    grid.innerHTML = state.insights.map(ins => {
+      const radaLabel = ins.rada==="agree"?"RADA agrees":ins.rada==="partial"?"RADA partially agrees":ins.rada==="disagree"?"RADA disagrees":"Not yet discussed";
+      const radaClass = ins.rada==="agree"?"agree":ins.rada==="partial"?"partial":ins.rada==="disagree"?"disagree":"";
+      return `
+      <div class="insight-card" data-action="open-insight" data-id="${ins.id}">
+        <h3>${esc(ins.title)}</h3>
+        <div class="footer-row">
+          <span class="pill conf-badge">${confDot(ins.confidence)} ${esc(ins.confidence)}</span>
+          <span class="rada-tag ${radaClass}">${radaLabel}</span>
+        </div>
+      </div>`;
+    }).join("") + `<div class="add-insight-card" data-action="add-insight">+ Add insight card</div>`;
+  }
+
+  /* ============================================================
+     RENDER: JOURNEY STRIP (always visible)
+     ============================================================ */
+  function renderJourneyStrip(){
+    const strip = document.getElementById("journeyStrip");
+    strip.innerHTML = state.steps.map((s, i) => `
+      <div class="step-card">
+        <div class="step-controls">
+          <button class="icon-btn" data-action="move-step" data-dir="-1" data-id="${s.id}" title="Move earlier">&#8592;</button>
+          <button class="icon-btn" data-action="move-step" data-dir="1" data-id="${s.id}" title="Move later">&#8594;</button>
+          <button class="icon-btn" data-action="delete-step" data-id="${s.id}" title="Delete step">&times;</button>
+        </div>
+        <div class="step-index">${i+1}</div>
+        <textarea class="step-title-input" rows="2" data-action="edit-step-title" data-id="${s.id}">${esc(s.title)}</textarea>
+        <span class="step-notes-label">Field note</span>
+        <textarea class="step-notes" data-action="edit-step-notes" data-id="${s.id}" placeholder="Notes on this step...">${esc(s.notes)}</textarea>
+      </div>
+    `).join("") + `<div class="add-step-card" data-action="add-step">+ Add step</div>`;
+  }
+
+  /* ============================================================
+     RENDER: OVERLAYS
+     ============================================================ */
+  function renderOverlay(){
+    const area = document.getElementById("overlayArea");
+    if(currentLayer === "stakeholders") area.innerHTML = stakeholderLayerHTML();
+    else if(currentLayer === "painpoints") area.innerHTML = columnLayerHTML("painpoints");
+    else area.innerHTML = columnLayerHTML("opportunities");
+    bindDragAndDrop();
+  }
+
+  function stakeholderLayerHTML(){
+    const headCells = state.steps.map(s => `<th>${esc(s.title)}</th>`).join("");
+    const rows = state.stakeholders.map(sh => {
+      const cells = state.steps.map(step => {
+        const cell = (state.involvement[step.id] && state.involvement[step.id][sh.id]) || {involved:false, role:"", notes:""};
+        return `<td>
+          <div class="stake-cell ${cell.involved?'involved':''}" data-action="open-stake-cell" data-step="${step.id}" data-sh="${sh.id}">
+            <span class="role ${cell.role? '' : 'empty'}">${cell.role? esc(cell.role) : (cell.involved? 'Involved — add role' : 'Not involved')}</span>
+            ${cell.notes? `<span class="snote">${esc(cell.notes)}</span>` : ""}
+          </div>
+        </td>`;
+      }).join("");
+      return `<tr><th>${esc(sh.name)}</th>${cells}</tr>`;
+    }).join("");
+    return `<div class="stake-table-wrap"><table class="stake-table">
+      <thead><tr><th>Stakeholder</th>${headCells}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  }
+
+  function columnLayerHTML(kind){
+    const list = state[kind]; // painpoints or opportunities
+    const isPain = kind === "painpoints";
+    const cols = state.steps.map(step => {
+      const items = list.filter(it => it.stepId === step.id);
+      const cards = items.map(it => itemCardHTML(it, kind, isPain)).join("");
+      return `
+        <div class="col">
+          <div class="col-head">${esc(step.title)}</div>
+          <div class="col-stack" data-action="drop-zone" data-kind="${kind}" data-step="${step.id}">
+            ${cards}
+            <button class="add-item-btn" data-action="add-item" data-kind="${kind}" data-step="${step.id}">+ Add ${isPain? "pain point":"opportunity"}</button>
+          </div>
+        </div>`;
+    }).join("");
+    return `<div class="col-board">${cols}</div>`;
+  }
+
+  function itemCardHTML(it, kind, isPain){
+    const stepOptions = state.steps.map(s => `<option value="${s.id}" ${s.id===it.stepId?'selected':''}>${esc(s.title)}</option>`).join("");
+    return `
+      <div class="item-card" draggable="true" data-action="item-card" data-kind="${kind}" data-id="${it.id}">
+        <div class="top-row">
+          <textarea class="item-title-input" rows="2" data-action="edit-item-field" data-kind="${kind}" data-id="${it.id}" data-field="title">${esc(it.title)}</textarea>
+          <button class="icon-btn" data-action="delete-item" data-kind="${kind}" data-id="${it.id}" title="Remove">&times;</button>
+        </div>
+        <textarea class="item-desc" rows="2" data-action="edit-item-field" data-kind="${kind}" data-id="${it.id}" data-field="desc">${esc(it.desc)}</textarea>
+        <textarea class="item-notes" data-action="edit-item-field" data-kind="${kind}" data-id="${it.id}" data-field="notes" placeholder="Notes from RADA...">${esc(it.notes)}</textarea>
+        <div class="item-footer">
+          ${isPain? `
+            <select class="imp-select" data-action="edit-item-field" data-kind="${kind}" data-id="${it.id}" data-field="importance">
+              ${["Critical","High","Medium","Low"].map(v=>`<option value="${v}" ${it.importance===v?'selected':''}>${v}</option>`).join("")}
+            </select>` : `<span class="imp-select">${impDot("")}</span>`}
+          <select class="move-select" data-action="move-item" data-kind="${kind}" data-id="${it.id}">
+            ${stepOptions}
+          </select>
+        </div>
+      </div>`;
+  }
+
+  /* ============================================================
+     DRAG & DROP (pain points / opportunities)
+     ============================================================ */
+  let dragItem = null; // {kind, id}
+  function bindDragAndDrop(){
+    document.querySelectorAll('.item-card[draggable="true"]').forEach(card => {
+      card.addEventListener("dragstart", (e) => {
+        dragItem = { kind: card.dataset.kind, id: card.dataset.id };
+        card.classList.add("dragging");
+      });
+      card.addEventListener("dragend", () => { card.classList.remove("dragging"); dragItem = null; });
+    });
+    document.querySelectorAll('.col-stack[data-action="drop-zone"]').forEach(zone => {
+      zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("dragover"); });
+      zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+      zone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        zone.classList.remove("dragover");
+        if(!dragItem) return;
+        const kind = zone.dataset.kind, stepId = zone.dataset.step;
+        if(dragItem.kind !== kind) return;
+        mutate(s => {
+          const it = s[kind].find(x=>x.id===dragItem.id);
+          if(it) it.stepId = stepId;
+        });
+        renderOverlay();
+      });
+    });
+  }
+
+  /* ============================================================
+     EVENT DELEGATION
+     ============================================================ */
+  document.addEventListener("click", (e) => {
+    const el = e.target.closest("[data-action]");
+    if(!el) return;
+    const action = el.dataset.action;
+
+    switch(action){
+      case "close-modal": closeModal(); renderInsights(); renderOverlay(); break;
+
+      case "open-insight": openInsightModal(el.dataset.id); break;
+      case "add-insight": {
+        const id = nid("ins");
+        mutate(s => s.insights.push({id, title:"New insight — click to edit", explanation:"", confidence:"Hypothesis", notes:"", rada:""}));
+        renderInsights(); openInsightModal(id); break;
+      }
+      case "delete-insight": {
+        mutate(s => s.insights = s.insights.filter(i=>i.id!==el.dataset.id));
+        closeModal(); renderInsights(); break;
+      }
+      case "seg-conf": {
+        const id = el.dataset.id, val = e.target.closest("button")?.dataset.val;
+        if(!val) return;
+        mutate(s => { const i = s.insights.find(x=>x.id===id); if(i) i.confidence = val; });
+        openInsightModal(id); renderInsights(); break;
+      }
+      case "seg-rada": {
+        const id = el.dataset.id, val = e.target.closest("button")?.dataset.val;
+        if(val===undefined) return;
+        mutate(s => { const i = s.insights.find(x=>x.id===id); if(i) i.rada = val; });
+        openInsightModal(id); renderInsights(); break;
+      }
+
+      case "add-step": {
+        mutate(s => s.steps.push({id:nid("st"), title:"New step", notes:""}));
+        renderJourneyStrip(); renderOverlay(); break;
+      }
+      case "delete-step": {
+        const id = el.dataset.id;
+        mutate(s => {
+          s.steps = s.steps.filter(x=>x.id!==id);
+          delete s.involvement[id];
+          s.painpoints = s.painpoints.filter(p=>p.stepId!==id);
+          s.opportunities = s.opportunities.filter(o=>o.stepId!==id);
+        });
+        renderJourneyStrip(); renderOverlay(); break;
+      }
+      case "move-step": {
+        const id = el.dataset.id, dir = parseInt(el.dataset.dir,10);
+        mutate(s => {
+          const idx = s.steps.findIndex(x=>x.id===id);
+          const newIdx = idx + dir;
+          if(newIdx<0 || newIdx>=s.steps.length) return;
+          const [item] = s.steps.splice(idx,1);
+          s.steps.splice(newIdx,0,item);
+        });
+        renderJourneyStrip(); renderOverlay(); break;
+      }
+
+      case "open-stake-cell": openStakeCellModal(el.dataset.step, el.dataset.sh); break;
+      case "seg-involved": {
+        const step = el.dataset.step, sh = el.dataset.sh, val = e.target.closest("button")?.dataset.val;
+        if(!val) return;
+        mutate(s => {
+          if(!s.involvement[step]) s.involvement[step] = {};
+          if(!s.involvement[step][sh]) s.involvement[step][sh] = {involved:false, role:"", notes:""};
+          s.involvement[step][sh].involved = (val === "yes");
+        });
+        openStakeCellModal(step, sh); renderOverlay(); break;
+      }
+
+      case "add-item": {
+        const kind = el.dataset.kind, stepId = el.dataset.step;
+        const isPain = kind === "painpoints";
+        const base = { id: nid(isPain?"pp":"op"), stepId, title: isPain? "New pain point":"New opportunity", desc:"", notes:"" };
+        if(isPain) base.importance = "Medium";
+        mutate(s => s[kind].push(base));
+        renderOverlay(); break;
+      }
+      case "delete-item": {
+        const kind = el.dataset.kind, id = el.dataset.id;
+        mutate(s => s[kind] = s[kind].filter(x=>x.id!==id));
+        renderOverlay(); break;
+      }
+
+      default: break;
+    }
+  });
+
+  document.addEventListener("change", (e) => {
+    const el = e.target.closest("[data-action]");
+    if(!el) return;
+    const action = el.dataset.action;
+    if(action === "move-item"){
+      const kind = el.dataset.kind, id = el.dataset.id, newStep = el.value;
+      mutate(s => { const it = s[kind].find(x=>x.id===id); if(it) it.stepId = newStep; });
+      renderOverlay();
+    }
+    if(action === "edit-item-field" && el.tagName === "SELECT"){
+      const kind = el.dataset.kind, id = el.dataset.id, field = el.dataset.field;
+      mutate(s => { const it = s[kind].find(x=>x.id===id); if(it) it[field] = el.value; });
+    }
+    if(action === "edit-cell-field" || action === "edit-insight-field" || action === "edit-step-title" || action === "edit-step-notes"){
+      /* handled on input for live typing; change is a safety net, no-op here */
+    }
+  });
+
+  // live text editing (input event) — keeps state in sync as the person types
+  document.addEventListener("input", (e) => {
+    const el = e.target.closest("[data-action]");
+    if(!el) return;
+    const action = el.dataset.action;
+
+    if(action === "edit-step-title"){
+      const id = el.dataset.id;
+      mutate(s => { const st = s.steps.find(x=>x.id===id); if(st) st.title = el.value; });
+      // also refresh anything showing the step title elsewhere
+      renderOverlay();
+      const idx = state.steps.findIndex(x=>x.id===id);
+      // keep index numbers correct without full re-render flicker
+    }
+    if(action === "edit-step-notes"){
+      const id = el.dataset.id;
+      mutate(s => { const st = s.steps.find(x=>x.id===id); if(st) st.notes = el.value; });
+    }
+    if(action === "edit-insight-field"){
+      const id = el.dataset.id, field = el.dataset.field;
+      mutate(s => { const ins = s.insights.find(x=>x.id===id); if(ins) ins[field] = el.value; });
+      if(field === "explanation" || field === "notes"){ /* keep grid untouched to avoid losing focus */ }
+    }
+    if(action === "edit-cell-field"){
+      const step = el.dataset.step, sh = el.dataset.sh, field = el.dataset.field;
+      mutate(s => {
+        if(!s.involvement[step]) s.involvement[step] = {};
+        if(!s.involvement[step][sh]) s.involvement[step][sh] = {involved:false, role:"", notes:""};
+        s.involvement[step][sh][field] = el.value;
+      });
+    }
+    if(action === "edit-item-field"){
+      const kind = el.dataset.kind, id = el.dataset.id, field = el.dataset.field;
+      mutate(s => { const it = s[kind].find(x=>x.id===id); if(it) it[field] = el.value; });
+    }
+  });
+
+  document.addEventListener("blur", (e) => {
+    const el = e.target.closest && e.target.closest("[data-action]");
+    if(!el) return;
+    if(el.dataset.action === "edit-step-title"){
+      renderJourneyStrip(); renderOverlay();
+    }
+  }, true);
+
+  // insight title (h3 contenteditable) — commit on blur
+  document.addEventListener("blur", (e) => {
+    const el = e.target.closest && e.target.closest('[data-action="edit-insight-title"]');
+    if(!el) return;
+    const id = el.dataset.id;
+    mutate(s => { const ins = s.insights.find(x=>x.id===id); if(ins) ins.title = el.textContent.trim(); });
+    renderInsights();
+  }, true);
+
+  /* ============================================================
+     TABS / LAYER SWITCH
+     ============================================================ */
+  document.querySelectorAll(".tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+      document.getElementById("view-" + btn.dataset.view).classList.add("active");
+    });
+  });
+  document.getElementById("layerSwitch").addEventListener("click", (e) => {
+    const btn = e.target.closest(".layer-btn");
+    if(!btn) return;
+    currentLayer = btn.dataset.layer;
+    document.querySelectorAll(".layer-btn").forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active");
+    renderOverlay();
+  });
+
+  /* ============================================================
+     INIT
+     ============================================================ */
+  async function init(){
+    await loadState();
+    renderInsights();
+    renderJourneyStrip();
+    renderOverlay();
+  }
+  init();
+
+})();
+</script>
+</body>
+</html>

@@ -40,6 +40,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { gcalEnabled, gcalToolDefs, handleGcalTool } from "./gcal.js";
 import { notionEnabled, notionToolDefs, handleNotionTool } from "./notion.js";
 import { renderShell, gatherDashboardData, gatherFinanceData, dashboardLink } from "./dashboard.js";
+import { recordUsage, summarizeUsage } from "./usage.js";
+import { saveFormValue, loadFormValue, formsPersistent } from "./formstore.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -888,6 +890,8 @@ async function main(): Promise<void> {
           `[cache] read=${cu.cache_read_input_tokens ?? 0} write=${cu.cache_creation_input_tokens ?? 0} fresh_input=${cu.input_tokens ?? 0} output=${cu.output_tokens ?? 0}`
         );
       }
+      // Persist per-call tokens so the dashboard can show lifetime cost and caching savings.
+      recordUsage(MODEL, resp.usage);
 
       if (resp.stop_reason === "tool_use") {
         messages.push({ role: "assistant", content: resp.content });
@@ -1029,6 +1033,17 @@ async function main(): Promise<void> {
     }
   });
 
+  // Pidgi API cost + prompt-caching savings (lifetime / day / week), for the finance tab.
+  receiver.router.get("/dashboard/usage", (req: any, res: any) => {
+    if (!dashKeyOk(req, res)) return;
+    try {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.json(summarizeUsage());
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
   // Private static page (roadtrip itinerary), served from slackbot/roadtrip.html,
   // gated by the same key as the dashboard so it is not publicly listed or guessable.
   receiver.router.get("/roadtrip", (req: any, res: any) => {
@@ -1039,6 +1054,52 @@ async function main(): Promise<void> {
       res.send(html);
     } catch {
       res.status(404).send("Roadtrip page not found.");
+    }
+  });
+
+  // Hosted fillable forms (e.g. the OpenTeleRehab WP1 doc). The page ships a window.storage
+  // shim that reads/writes here, so the app's own saveState/loadState persist server-side.
+  function readJsonBody(req: any, cap = 4_000_000): Promise<any> {
+    return new Promise((resolve) => {
+      if (req.body && typeof req.body === "object") { resolve(req.body); return; }
+      let data = "";
+      let tooBig = false;
+      req.on("data", (c: any) => { data += c; if (data.length > cap) { tooBig = true; req.destroy(); } });
+      req.on("end", () => { if (tooBig) return resolve(null); try { resolve(JSON.parse(data || "{}")); } catch { resolve(null); } });
+      req.on("error", () => resolve(null));
+    });
+  }
+  const formId = (req: any) => String(req.params.id || "").replace(/[^a-z0-9_-]/gi, "");
+
+  receiver.router.get("/form/:id", (req: any, res: any) => {
+    if (!dashKeyOk(req, res)) return;
+    try {
+      const html = readFileSync(path.join(__dirname, "forms", `${formId(req)}.html`), "utf8");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch {
+      res.status(404).send("Form not found.");
+    }
+  });
+
+  receiver.router.get("/form/:id/data", (req: any, res: any) => {
+    if (!dashKeyOk(req, res)) return;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.json(loadFormValue(formId(req)));
+  });
+
+  receiver.router.post("/form/:id/save", async (req: any, res: any) => {
+    if (!dashKeyOk(req, res)) return;
+    const body = await readJsonBody(req);
+    if (!body || typeof body.value !== "string") {
+      res.status(400).json({ error: "expected { value: string }" });
+      return;
+    }
+    try {
+      saveFormValue(formId(req), body.value);
+      res.json({ ok: true, persistent: formsPersistent() });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || String(e) });
     }
   });
 
