@@ -343,7 +343,7 @@ async function main(): Promise<void> {
   anthropicTools.push({
     name: "get_project_reservations",
     description:
-      "Get ALL planned reservations for ONE project, correctly scoped and labelled. Pass project_id (and optional start_date/end_date). Returns each reservation with date, weekday, hours, assignee name, the real task title, the project name, and an out_of_range flag. Use THIS for any 'what's planned on project X' or 'who works on what on project X' question, instead of listing reservations by person — it only ever returns THIS project's reservations, so it cannot pull or mislabel another project's data.",
+      "Get ALL planned reservations for ONE project, correctly scoped and labelled. Pass project_id (and optional start_date/end_date). Returns each reservation with its id, date, weekday, hours, assignee name, the real task title, the project name, and an out_of_range flag. Use THIS for any 'what's planned on project X' or 'who works on what on project X' question, instead of listing reservations by person — it only ever returns THIS project's reservations, so it cannot pull or mislabel another project's data. To DELETE or MOVE blocks, take the `id` from each row here and pass it to teamleader_delete_reservation or teamleader_update_reservation (after listing the exact items and getting an explicit go).",
     input_schema: {
       type: "object",
       properties: {
@@ -360,7 +360,7 @@ async function main(): Promise<void> {
   anthropicTools.push({
     name: "get_user_reservations",
     description:
-      "Get ALL planned reservations for ONE person across EVERY project, correctly attributed and complete. Pass user_id OR user_query (a name or email), with optional start_date/end_date and min_minutes (e.g. 240 to keep only blocks of 4h or more). Returns every reservation with date, weekday, hours, the real task title, and — resolved from the task itself, never guessed — the correct project name and colour, plus an out_of_range flag. It pages through ALL results, so the count is the COMPLETE set: if a project or block is not in the output, it genuinely is not planned. Use THIS for any 'my blocks', 'what am I / is X working on', or cross-project personal-planning question. NEVER build such a view by listing reservations by hand and guessing the project.",
+      "Get ALL planned reservations for ONE person across EVERY project, correctly attributed and complete. Pass user_id OR user_query (a name or email), with optional start_date/end_date and min_minutes (e.g. 240 to keep only blocks of 4h or more). Returns every reservation with date, weekday, hours, the real task title, and — resolved from the task itself, never guessed — the correct project name and colour, plus an out_of_range flag. It pages through ALL results, so the count is the COMPLETE set: if a project or block is not in the output, it genuinely is not planned. Use THIS for any 'my blocks', 'what am I / is X working on', or cross-project personal-planning question. NEVER build such a view by listing reservations by hand and guessing the project. Each row includes the reservation `id`, so to DELETE or MOVE blocks (e.g. 'remove all Takeda hours from Jul 30 to Aug 31'), read them here first, then pass each id to teamleader_delete_reservation or teamleader_update_reservation after listing the exact items and getting an explicit go.",
     input_schema: {
       type: "object",
       properties: {
@@ -556,6 +556,7 @@ async function main(): Promise<void> {
         const rows = reservations.map((r) => {
           const tid = r.source?.id;
           return {
+            id: r.id, // reservation UUID — pass to teamleader_delete_reservation / teamleader_update_reservation
             date: r.date,
             weekday: weekdayOf(r.date),
             hours: (r.duration?.value || 0) / 60,
@@ -647,6 +648,7 @@ async function main(): Promise<void> {
             const ti = (tid && taskInfo[tid]) || { title: "(non-task block)", projectId: null };
             const pi = ti.projectId ? projInfo[ti.projectId] : null;
             return {
+              id: r.id, // reservation UUID — pass to teamleader_delete_reservation / teamleader_update_reservation
               date: r.date,
               weekday: weekdayOf(r.date),
               hours: (r.duration?.value || 0) / 60,
