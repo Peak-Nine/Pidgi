@@ -1115,6 +1115,18 @@ async function main(): Promise<void> {
     return true;
   }
 
+  // Channel threads Pidgi has joined (via an @mention). Once it is in a thread, it keeps
+  // answering replies there without needing a fresh @mention on every message, so a
+  // follow-up like "yes thanks" continues the conversation. Keyed by channel:threadRootTs.
+  const activeThreads = new Set<string>();
+  function joinThread(channel: string, rootTs: string) {
+    activeThreads.add(`${channel}:${rootTs}`);
+    if (activeThreads.size > 500) activeThreads.clear();
+  }
+  function inActiveThread(channel: string, threadTs?: string): boolean {
+    return !!threadTs && activeThreads.has(`${channel}:${threadTs}`);
+  }
+
   // convoKey      = where memory is filed (the channel/DM; one continuous memory).
   // replyThreadTs = where the reply is posted: undefined posts at the top level,
   //                 a thread ts posts inside that thread. Callers decide the rule:
@@ -1167,8 +1179,11 @@ async function main(): Promise<void> {
   app.event("app_mention", async ({ event, say }) => {
     const e: any = event;
     if (!firstTime(`${e.channel}:${e.ts}`)) return;
-    // @mention: reply in a thread (under the mention, or the existing thread).
-    await handle(e.text || "", e.user, say, e.channel, e.thread_ts || e.ts);
+    // @mention: reply in a thread (under the mention, or the existing thread) and remember
+    // this thread so later replies in it continue without needing another @mention.
+    const root = e.thread_ts || e.ts;
+    joinThread(e.channel, root);
+    await handle(e.text || "", e.user, say, e.channel, root);
   });
 
   app.event("message", async ({ event, say }) => {
@@ -1180,8 +1195,13 @@ async function main(): Promise<void> {
       await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
       return;
     }
-    // In channels/groups Pidgi stays silent EXCEPT for a solo 🕊️ summon, so it
-    // never runs the assistant on normal channel chatter, only the easter egg.
+    // In a channel thread Pidgi has already joined, keep answering follow-ups (e.g. "yes
+    // thanks") without a fresh @mention, and reply inside that same thread.
+    if (inActiveThread(e.channel, e.thread_ts)) {
+      await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
+      return;
+    }
+    // Otherwise Pidgi stays silent on normal channel chatter, EXCEPT a solo 🕊️ summon.
     const channelText = (e.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
     if (doveTrigger(channelText)) {
       await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
