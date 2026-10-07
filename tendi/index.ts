@@ -55,6 +55,9 @@ import { TeamleaderBridge, teamleaderEnabled, type AnthropicToolDef } from "./te
 import { CanvaBridge, canvaConfigured, isCanvaWriteTool } from "./canva.js";
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
+import { startScoutService, scoutConfig } from "./scout/service.js";
+import { scoutDigestBlock, scoutItemBlock } from "./scout/handoff.js";
+import { itemsForDigest, type SeenRecord } from "./scout/store.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -445,7 +448,15 @@ async function main(): Promise<void> {
   }
 
   receiver.router.get("/healthz", (_req: any, res: any) => {
-    res.json({ ok: true, model: MODEL, teamleader: !!teamleader, canva: canva ? canva.status() : { configured: false }, persistent: statePersistent() });
+    const sc = scoutConfig();
+    res.json({
+      ok: true,
+      model: MODEL,
+      teamleader: !!teamleader,
+      canva: canva ? canva.status() : { configured: false },
+      persistent: statePersistent(),
+      scout: { enabled: sc.enabled, channel_set: !!sc.channel, time: sc.time, tz: sc.tz },
+    });
   });
 
   receiver.router.get("/usage", (req: any, res: any) => {
@@ -619,6 +630,11 @@ async function main(): Promise<void> {
     try {
       const extracted = files.length ? await ingestFiles(files, state) : [];
       const parts: string[] = [];
+      // First message to Tendi in a Scout digest thread: pass the tenders posted there.
+      if (isNew && !isDm) {
+        const digest = itemsForDigest(channel, rootTs);
+        if (digest && digest.length) parts.push(scoutDigestBlock(digest));
+      }
       if (cleaned) parts.push(cleaned);
       for (const x of extracted) parts.push(inlineBlock(x));
       const userText = parts.join("\n\n");
@@ -640,6 +656,39 @@ async function main(): Promise<void> {
       await say({ text: msg, thread_ts: replyThreadTs });
     }
   }
+
+  // ── Scout: daily tender digest, feedback, and the "Start a proposal" handoff ──
+  async function startFromScout({ channel, userId, record }: { channel: string; userId: string; record: SeenRecord }): Promise<void> {
+    const intro: any = await slackWeb.chat.postMessage({
+      channel,
+      text: `📝 <@${userId}> asked me to start a proposal for *${record.title}*${record.buyer ? ` (${record.buyer})` : ""}. I'll work on it in this thread.`,
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+    const rootTs: string = intro?.ts;
+    if (!rootTs) return;
+    const state = newThread(channel, rootTs);
+    saveThread(state);
+    const say = (args: any) => slackWeb.chat.postMessage({ channel, unfurl_links: false, ...args });
+    let ack: any = null;
+    try {
+      ack = await say({ text: "📝 Reading the notice…", thread_ts: rootTs });
+    } catch {
+      /* deliver below */
+    }
+    try {
+      const identity = await resolveIdentity(userId);
+      const text = `${scoutItemBlock(record)}\n\nStart a proposal for this tender. Read the notice first, then tell me which proposal type fits and what you still need from us.`;
+      const answer = await ask(text, userId, state, { channel, threadTs: rootTs }, identity);
+      await deliver(say, ack, answer, rootTs);
+    } catch (err: any) {
+      const msg = `Something went wrong: ${err?.message || err}`;
+      console.error(msg);
+      await say({ text: msg, thread_ts: rootTs });
+    }
+  }
+
+  startScoutService({ app, router: receiver.router, anthropic, adminOk, startProposal: startFromScout });
 
   app.event("app_mention", async ({ event, say }) => {
     const e: any = event;

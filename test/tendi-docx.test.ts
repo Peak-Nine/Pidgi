@@ -106,6 +106,7 @@ describe("tendi/prompt", () => {
       "05-credentials.md",
       "06-teamleader.md",
       "07-canva.md",
+      "08-scout-handoff.md",
     ]);
     const prompt = buildStaticSystemPrompt(dir);
     expect(prompt).toContain("You are Tendi");

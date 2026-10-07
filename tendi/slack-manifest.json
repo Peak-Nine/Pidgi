@@ -27,17 +27,29 @@
         "files:read",
         "files:write",
         "users:read",
-        "users:read.email"
+        "users:read.email",
+        "reactions:read"
       ]
     }
   },
   "settings": {
     "event_subscriptions": {
       "request_url": "https://REPLACE-WITH-YOUR-RENDER-HOST/slack/events",
-      "bot_events": ["app_mention", "message.im", "message.channels", "message.groups"]
+      "bot_events": [
+        "app_mention",
+        "message.im",
+        "message.channels",
+        "message.groups",
+        "reaction_added",
+        "reaction_removed"
+      ]
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,
-    "token_rotation_enabled": false
+    "token_rotation_enabled": false,
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://REPLACE-WITH-YOUR-RENDER-HOST/slack/events"
+    }
   }
 }
