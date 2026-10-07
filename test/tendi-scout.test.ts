@@ -41,6 +41,9 @@ describe("scout/filter", () => {
     expect(prefilter(opp({ title: "UNDP-ETH-1 - IC-National Consultant to Support capacity development - UNDP - ETHIOPIA", summary: "" })).keep).toBe(false);
     expect(prefilter(opp({ title: "UNDP-PNG-00212 - National Climate Finance Consultant - EU-SRBC Project - UNDP - PAPUA NEW GUINEA", summary: "" })).keep).toBe(false);
     expect(prefilter(opp({ title: "Lead consultant on Business and Human Rights (National)", summary: "" })).keep).toBe(false);
+    expect(prefilter(opp({ title: "UNDP-MNG-00755 - IC/2026/108 - PFM Lead Consultant (National Consultant) - UNDP - MONGOLIA", summary: "" })).keep).toBe(false);
+    expect(prefilter(opp({ title: "UNDP-LSO-00496 - Request for Expression of Interest : Roster of National Consultants - UNDP - LESOTHO", summary: "" })).keep).toBe(false);
+    expect(prefilter(opp({ title: "UNDP-MDA-01126 - Qu26/03121:PRIM National Consultant Design Content Creation EVO - UNDP - MOLDOVA", summary: "" })).keep).toBe(false);
     expect(prefilter(opp({ title: "International Consultant for a strategy evaluation", summary: "" })).keep).toBe(true);
     expect(prefilter(opp({ title: "Consultancy for Mapping and Analysis of National Policies and Strategies", summary: "" })).keep).toBe(true);
     expect(prefilter(opp({ title: "Consultant to review the national strategy", summary: "" })).keep).toBe(true);

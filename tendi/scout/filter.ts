@@ -45,7 +45,7 @@ export const NEGATIVE = [
  * to keep them. "International consultant" is not affected.
  */
 export const NATIONAL_ONLY =
-  /(^|[-:\u2013|]\s*)(national|local)\b[^-:\u2013|]{0,60}\bconsultant|\bconsultant\(?e?\)?\s+nationa(l|le|ux)\b|\(national\)|recruitment of an? (national|local)\b|recrutement d.un\(?e?\)? consultant\(?e?\)? nationa/i;
+  /\bnational\s+(individual\s+)?consultants?\b|(^|[-:\u2013|(]\s*)(national|local)\b[^-:\u2013|]{0,60}\bconsultant|\bconsultant\(?e?\)?\s+nationa(l|le|ux)\b|\(national\)|recruitment of an? (national|local)\b|recrutement d.un\(?e?\)? consultant\(?e?\)? nationa/i;
 
 // Meta keys that describe the source's own classification, not the assignment.
 // TED's category is the CPV label we searched on ("consultancy services"), so it
