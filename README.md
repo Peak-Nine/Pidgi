@@ -2,6 +2,11 @@
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that wraps the **Teamleader Focus CRM API**. Gives AI assistants (Claude Code, Claude Desktop, Cursor, etc.) the ability to manage contacts, companies, deals, tasks, events, invoices, time tracking, and projects — including a smart task resolution workflow for automated time logging.
 
+> **Peak Nine bots in this repo.** Two Slack bots run from this repository as separate Render web services:
+> [`slackbot/`](slackbot/README.md) is **Pidgi** (planning, Teamleader, Google Calendar, Notion) and
+> [`tendi/`](tendi/README.md) is **Tendi** (proposal making: Proof of Change, modular proposal, RFP from the Philea template).
+> Both reuse the Teamleader MCP server below as their Teamleader tool source.
+
 Inspired by [globodai-group/mcp-teamleader](https://github.com/globodai-group/mcp-teamleader). Rewritten and extended with full API coverage, time tracking, projects v2, and smart cache-first task resolution.
 
 ---

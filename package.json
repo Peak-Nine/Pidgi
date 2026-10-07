@@ -13,6 +13,8 @@
   "scripts": {
     "build": "tsc",
     "slackbot": "tsx slackbot/index.ts",
+    "tendi": "tsx tendi/index.ts",
+    "tendi:check": "tsc --noEmit -p tendi/tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
@@ -51,9 +53,12 @@
     "@modelcontextprotocol/sdk": "^1.5.0",
     "@notionhq/client": "2.3.0",
     "@slack/bolt": "^4.7.3",
+    "docx": "^9.9.0",
     "dotenv": "^17.4.2",
     "googleapis": "^173.0.0",
+    "mammoth": "^1.13.0",
     "open": "^11.0.0",
+    "pdf-parse": "^2.4.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
