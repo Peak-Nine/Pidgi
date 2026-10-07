@@ -64,21 +64,22 @@ Health check: `GET https://<host>/healthz` returns the model, whether Teamleader
 
 ## 3. Connect Canva (optional, once)
 
-Tendi talks to Canva through Canva's own hosted MCP server (`https://mcp.canva.com/mcp`), the same server Claude.ai uses. That server advertises OAuth 2.1 with dynamic client registration and PKCE, which is what `tendi/canva.ts` implements through the MCP SDK.
+Tendi talks to Canva through Canva's own hosted MCP server (`https://mcp.canva.com/mcp`), the same server Claude.ai uses. Canva's login only redirects back to known apps or to `localhost`; a redirect to a Render host is refused with "Invalid redirect URI" (verified 2026-10-07). So the login happens once on a laptop, and the result is handed to the hosted service, the same pattern pidgi uses for its Google and Teamleader tokens.
 
-1. Make sure `PUBLIC_BASE_URL` and `TENDI_ADMIN_KEY` are set and the service is deployed.
-2. Open `https://<your-tendi-host>/canva/connect?key=<TENDI_ADMIN_KEY>` in a browser while logged in to the Peak Nine Canva account. Canva asks you to approve Tendi; you land back on `/canva/callback` with "Canva connected".
-3. `GET /canva/status?key=...` lists the Canva tools Tendi now sees. In Slack, Tendi's `canva_status` tool reports the same.
+1. On a computer with the repo: `npm install && npm run tendi:canva-login`. A browser window opens on Canva (log in to the Peak Nine account that owns the templates) and asks you to approve "Tendi (Peak Nine proposal assistant)". The script receives the redirect on `http://localhost:8765/canva/callback`, exchanges the code, lists Canva's tools as a check, and prints a one-line `CANVA_OAUTH_JSON` value.
+   If the browser ends on a "can't connect to localhost" page (the script runs on another machine), copy the full URL from the address bar and run `npm run tendi:canva-login -- finish "<that URL>"`.
+2. In Render → Tendi → Environment, add `CANVA_OAUTH_JSON` with that value and save. Render redeploys; `GET /healthz` then shows `canva.connected: true`, and `GET /canva/status?key=...` lists the Canva tools Tendi sees. In Slack, Tendi's `canva_status` tool reports the same.
+3. From then on the hosted instance only refreshes tokens, which needs no redirect. The refreshed tokens live on the persistent disk (`/var/data/tendi-canva-oauth.json`); the env value is only read when the disk holds no login. If Canva ever revokes the login, run the script again and replace the env value.
 
 What to expect, honestly:
 
-- Verified on 2026-10-07 from a sandbox against the live server: the OAuth metadata and scopes at `mcp.canva.com/.well-known/...`, dynamic client registration (Canva issued a client id to an unlisted client) and the PKCE authorization URL.
-- Not yet verified: the login itself, the token exchange and the tool listing, which need a real Canva login. Canva's help centre describes the connector as built for "supported AI assistants" (ChatGPT, Claude, Gemini, Copilot). If the login fails, Tendi logs the error, keeps working without Canva, and hands Niels a manual Canva checklist instead.
+- Verified on 2026-10-07 from a sandbox against the live server: OAuth metadata and scopes, dynamic client registration (Canva issues a client id to an unlisted client), the redirect policy above, and the authorization URL with a localhost redirect leading to Canva's real consent screen.
+- The token exchange and the tool listing are verified by the script itself when it completes (it lists the tools before printing the value).
 - Whiteboards (the Philea methodology poster) are not editable through the API. Tendi gives you the ordered find-and-replace map; the replacing stays manual, as in the skill.
 - Per-user login: the tokens belong to whoever logged in. Use the account that owns the templates.
 - Tool names come from Canva at runtime (prefixed `canva_`), so a change on Canva's side does not need a code change here.
 
-If the service has no persistent disk, `GET /canva/export?key=...` (only when `TENDI_ALLOW_TOKEN_EXPORT=1`) returns the stored OAuth JSON so you can paste it into `CANVA_OAUTH_JSON` and survive a redeploy. Treat that JSON as a password.
+`tendi/.canva-oauth.json` (the script's output) is git-ignored. Treat it and the env value as passwords: they carry a Canva refresh token. `GET /canva/export?key=...` (only when `TENDI_ALLOW_TOKEN_EXPORT=1`) returns the hosted instance's current JSON if you ever need to move it.
 
 ## 4. Teamleader
 

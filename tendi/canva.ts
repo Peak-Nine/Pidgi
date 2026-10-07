@@ -14,12 +14,16 @@
  *     Render they are lost on redeploy and the login has to be repeated (or the
  *     JSON is seeded through the CANVA_OAUTH_JSON env var).
  *
- * Honest status (2026-10-07): verified from a sandbox against the live server:
- * metadata discovery, dynamic client registration (Canva returned a client_id) and
- * the PKCE authorization URL. Not yet verified: the user login, the token exchange
- * and the tool listing; those need a real Canva login by Niels. Canva's help pages
- * describe the connector as built for "supported AI assistants", so if the token
- * exchange is refused, Tendi keeps working without Canva and says so.
+ * Redirect policy, verified against the live server on 2026-10-07: Canva's /authorize
+ * accepts the redirect URIs of known clients (claude.ai, cursor://) and loopback
+ * addresses (http://localhost:<port>/..., http://127.0.0.1:<port>/...), and answers
+ * "Invalid redirect URI." (HTTP 400) for any other https host, onrender.com included.
+ * So a hosted Tendi cannot complete the browser redirect itself. The supported route is
+ * `npm run tendi:canva-login` on a laptop (tendi/canva-login.ts): it registers a client
+ * with a localhost redirect, completes the login, and prints a CANVA_OAUTH_JSON value
+ * to paste into the hosted service's environment. The hosted instance then only ever
+ * uses the refresh token, which needs no redirect. The /canva/connect route stays for
+ * the day Canva relaxes the policy (and for local runs, where the redirect IS localhost).
  */
 import { randomBytes } from "crypto";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs";
@@ -66,34 +70,48 @@ function storeFile(): string {
   return process.env.TENDI_CANVA_TOKEN_FILE || path.join(dataDir(), "tendi-canva-oauth.json");
 }
 
+export function parseSeed(seed: string | undefined): Stored | null {
+  if (!seed) return null;
+  try {
+    const raw = seed.trim();
+    const j = JSON.parse(raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8"));
+    return j && typeof j === "object" ? (j as Stored) : null;
+  } catch {
+    return null;
+  }
+}
+
 export class FileOAuthProvider implements OAuthClientProvider {
   pendingAuthUrl: string | null = null;
-  constructor(private readonly redirect: string) {}
+  private readonly file: string;
+  constructor(private readonly redirect: string, file?: string) {
+    this.file = file || storeFile();
+  }
+
+  get storePath(): string {
+    return this.file;
+  }
 
   private read(): Stored {
+    let stored: Stored = {};
     try {
-      if (existsSync(storeFile())) return JSON.parse(readFileSync(storeFile(), "utf8"));
+      if (existsSync(this.file)) stored = JSON.parse(readFileSync(this.file, "utf8"));
     } catch {
-      /* fall through */
+      stored = {};
     }
-    // Seed from env once (useful on hosts without a persistent disk).
-    const seed = process.env.CANVA_OAUTH_JSON;
-    if (seed) {
-      try {
-        const j = JSON.parse(seed.trim().startsWith("{") ? seed : Buffer.from(seed, "base64").toString("utf8"));
-        if (j && typeof j === "object") {
-          this.write(j);
-          return j;
-        }
-      } catch {
-        /* ignore bad seed */
-      }
+    if (stored.tokens?.access_token) return stored;
+    // No usable login on disk: import CANVA_OAUTH_JSON if it carries one. This is how the
+    // tokens from `npm run tendi:canva-login` (done on a laptop) reach a hosted instance.
+    const seed = parseSeed(process.env.CANVA_OAUTH_JSON);
+    if (seed?.tokens?.access_token) {
+      this.write(seed);
+      return seed;
     }
-    return {};
+    return stored;
   }
   private write(s: Stored): void {
     s.savedAt = Date.now();
-    writeFileSync(storeFile(), JSON.stringify(s), { mode: 0o600 });
+    writeFileSync(this.file, JSON.stringify(s), { mode: 0o600 });
   }
 
   get redirectUrl(): string {
@@ -207,7 +225,7 @@ export class CanvaBridge {
   /** Start (or silently complete, if a refresh token still works) the OAuth flow. */
   async beginAuth(): Promise<{ redirect?: string; connected: boolean }> {
     this.provider.pendingAuthUrl = null;
-    const result = await auth(this.provider, { serverUrl: CANVA_MCP_URL });
+    const result = await auth(this.provider, { serverUrl: CANVA_MCP_URL, scope: CANVA_SCOPES });
     if (result === "REDIRECT") return { redirect: this.provider.pendingAuthUrl || undefined, connected: false };
     await this.connect();
     return { connected: true };
@@ -215,7 +233,7 @@ export class CanvaBridge {
 
   async finishAuth(code: string, state: string | undefined): Promise<void> {
     if (!this.provider.checkState(state)) throw new Error("OAuth state mismatch; start again from /canva/connect.");
-    const result = await auth(this.provider, { serverUrl: CANVA_MCP_URL, authorizationCode: code });
+    const result = await auth(this.provider, { serverUrl: CANVA_MCP_URL, authorizationCode: code, scope: CANVA_SCOPES });
     if (result !== "AUTHORIZED") throw new UnauthorizedError("Canva did not authorize the client.");
     await this.connect();
   }

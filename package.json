@@ -15,6 +15,7 @@
     "slackbot": "tsx slackbot/index.ts",
     "tendi": "tsx tendi/index.ts",
     "tendi:check": "tsc --noEmit -p tendi/tsconfig.json",
+    "tendi:canva-login": "tsx tendi/canva-login.ts",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",

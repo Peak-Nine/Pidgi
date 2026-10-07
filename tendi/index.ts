@@ -464,6 +464,29 @@ async function main(): Promise<void> {
       res.status(400).send("Canva is not configured: set PUBLIC_BASE_URL on this service.");
       return;
     }
+    // Canva's MCP login only redirects back to known apps or to localhost, so on a hosted
+    // instance the browser flow ends in "Invalid redirect URI". Explain the working route
+    // unless the caller insists (?force=1), e.g. when running Tendi locally on localhost.
+    const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(publicBaseUrl);
+    if (!isLocal && req.query.force !== "1" && !canva.provider.hasTokens()) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.send(
+        [
+          "Canva login for a hosted Tendi works through a laptop, not through this page.",
+          "",
+          "Canva's MCP login only redirects back to known apps or to localhost, so a redirect to this host is refused",
+          '("Invalid redirect URI"). Do this once instead:',
+          "",
+          "  1. On a computer with the repo: npm install && npm run tendi:canva-login",
+          "  2. Approve Tendi in the browser window that opens (log in to the Peak Nine Canva account).",
+          "  3. Copy the printed CANVA_OAUTH_JSON value into this service's environment on Render and save.",
+          "  4. After the redeploy, /healthz shows canva.connected: true.",
+          "",
+          "Add ?force=1 to this URL to attempt the browser redirect anyway.",
+        ].join("\n")
+      );
+      return;
+    }
     try {
       const r = await canva.beginAuth();
       if (r.connected) {
