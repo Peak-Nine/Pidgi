@@ -90,7 +90,8 @@ function toolResultContent(out: { text: string; images?: { data: string; mimeTyp
 
 const MODEL = process.env.TENDI_MODEL || "claude-opus-4-8";
 const MAX_TOKENS = Number(process.env.TENDI_MAX_TOKENS) || 16000;
-const MAX_STEPS = Number(process.env.TENDI_MAX_STEPS) || 30;
+// A Canva build (copy, map, several fills, fixes, save, PDF) needs room; 30 ran out mid-build.
+const MAX_STEPS = Number(process.env.TENDI_MAX_STEPS) || 60;
 const PORT = Number(process.env.PORT) || 3000;
 const WEB_SEARCH = process.env.TENDI_WEB_SEARCH !== "0";
 const WRITE_ALLOWLIST = (process.env.TENDI_WRITE_ALLOWLIST || "")
@@ -516,6 +517,7 @@ async function main(): Promise<void> {
             } catch (e: any) {
               out = { isError: true, text: `Tool ${block.name} did not finish: ${e?.message || e}` };
             }
+            if (out.isError) console.error(`[tool] ${block.name} error: ${out.text.slice(0, 600)}`);
             toolResults.push({ type: "tool_result", tool_use_id: block.id, content: toolResultContent(out), is_error: out.isError });
           }
         }

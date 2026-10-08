@@ -106,6 +106,10 @@ How to do it:
 
 If the editing session expired between the preview and his yes, `canva_doc_fill` says so: run it again with `reapply: true` and `finalize: "commit"`. If Canva is not connected, deliver the master text as Word and say the Canva version waits for the connection.
 
+When Niels says to go all the way ("whatever it takes", "only reply when done", "deliver everything now"), that is his yes for the preview in step 6 as well. Do steps 2 to 8 in one go: build, check the thumbnails, fix what is off, save, scan for leftovers, export, and reply once with the PDF, the edit link and the short list of what stays manual. Do not stop halfway to offer options again, and do not swap the Canva PDF for the Word file when he asked for Canva.
+
+If `canva_doc_map` or `canva_doc_fill` returns an error, quote its text to Niels in one line (it is what Niels needs to get it fixed) and say what you will do instead. Do not describe a tool as "down" without the error text.
+
 Portal splits: one PDF per upload slot through `deliver_canva_pdf` with `pages`, named "<slot number> <slot name> - Peak Nine for <client>.pdf", when the portal has separate slots.
 
 ## Step 6. The poster

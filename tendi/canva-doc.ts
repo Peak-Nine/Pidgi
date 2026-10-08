@@ -399,7 +399,20 @@ export function rekey(updated: MapPage, before: MapPage): MapPage {
 
 // ---- the two tools -------------------------------------------------------
 
-const PAGES_PER_READ = 4;
+const PAGES_PER_READ = 6;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** One retry pass for Canva's per-minute limits; everything else goes straight back. */
+export function withRetry(call: CanvaCaller, waitMs = 20_000): CanvaCaller {
+  return async (tool, input) => {
+    let r = await call(tool, input);
+    for (let i = 0; i < 2 && r.isError && /rate.?limit|429|too many requests|throttl/i.test(r.text); i++) {
+      await sleep(waitMs);
+      r = await call(tool, input);
+    }
+    return r;
+  };
+}
 
 async function readPages(call: CanvaCaller, designId: string, pages: number[] | null, transactionId?: string): Promise<{ map?: DocMap; error?: string }> {
   // Page count first (cheap), opening the session at the same time when needed.
@@ -411,9 +424,10 @@ async function readPages(call: CanvaCaller, designId: string, pages: number[] | 
   });
   if (meta.isError) return { error: `Canva read failed: ${meta.text.slice(0, 400)}` };
   const mj = parseJson(meta.text) || {};
-  const txn = transactionId || mj?.transaction?.transaction_id;
-  if (!txn) return { error: `Canva did not open an editing session: ${meta.text.slice(0, 300)}` };
-  const total = Array.isArray(mj.page_metadata) ? mj.page_metadata.length : 0;
+  const txn = transactionId || mj?.transaction?.transaction_id || mj?.transaction_id;
+  if (!txn) return { error: `Canva did not open an editing session. Its answer began: ${meta.text.slice(0, 400)}` };
+  const pm = mj.page_metadata;
+  const total = Array.isArray(pm) ? pm.length : Number(pm?.total_pages || mj?.design_metadata?.page_count) || 0;
   const want = (pages && pages.length ? pages : Array.from({ length: total }, (_, i) => i + 1)).filter((n) => n >= 1 && (!total || n <= total));
   const out: MapPage[] = [];
   for (let i = 0; i < want.length; i += PAGES_PER_READ) {
@@ -421,13 +435,17 @@ async function readPages(call: CanvaCaller, designId: string, pages: number[] | 
     const r = await call("read-design", { design_id: designId, transaction_id: txn, filter: { fields: ["design_content"], page_indices: chunk }, user_intent: "Map the text boxes of the proposal copy" });
     if (r.isError) return { error: `Canva read of pages ${chunk.join(",")} failed: ${r.text.slice(0, 300)}` };
     const j = parseJson(r.text);
-    const got: any[] = j?.design_content?.pages || [];
+    const dc = typeof j?.design_content === "string" ? parseJson(j.design_content) : j?.design_content;
+    const got: any[] = dc?.pages || j?.pages || [];
+    if (!got.length) return { error: `Canva returned no page structure for pages ${chunk.join(",")}. Its answer began: ${r.text.slice(0, 400)}` };
     got.forEach((pg, k) => out.push(parsePage(pg, chunk[k] ?? chunk[0] + k)));
   }
+  if (!out.length) return { error: `No pages to map (Canva reported ${total} pages). Its answer began: ${meta.text.slice(0, 300)}` };
   return { map: { designId, transactionId: txn, pages: out, at: Date.now() } };
 }
 
-export async function canvaDocMap(call: CanvaCaller, input: { design_id: string; pages?: number[] }): Promise<CallResult> {
+export async function canvaDocMap(rawCall: CanvaCaller, input: { design_id: string; pages?: number[] }): Promise<CallResult> {
+  const call = withRetry(rawCall);
   const designId = String(input?.design_id || "").trim();
   const prev = getMap(designId);
   const r = await readPages(call, designId, Array.isArray(input?.pages) ? input.pages.map(Number) : null);
@@ -443,7 +461,8 @@ function expired(text: string): boolean {
   return /transaction|session/i.test(text) && /(expired|not found|invalid|no longer|unknown)/i.test(text);
 }
 
-export async function canvaDocFill(call: CanvaCaller, input: FillInput): Promise<CallResult> {
+export async function canvaDocFill(rawCall: CanvaCaller, input: FillInput): Promise<CallResult> {
+  const call = withRetry(rawCall);
   const designId = String(input?.design_id || "").trim();
   let map = getMap(designId);
   if (!map) return { isError: true, text: "No map for this design. Call canva_doc_map first." };

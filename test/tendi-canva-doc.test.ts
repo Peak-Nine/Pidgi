@@ -164,7 +164,40 @@ describe("canva-doc: the fill tool against a fake Canva", () => {
   });
 });
 
+describe("canva-doc: failing loudly instead of mapping nothing", () => {
+  it("retries once Canva's per-minute limit clears", async () => {
+    let n = 0;
+    const flaky: any = async () => (++n < 2 ? { isError: true, text: "429 Too Many Requests" } : { isError: false, text: "{}" });
+    const r = await doc.withRetry(flaky, 1)("read-design", {});
+    expect(r.isError).toBe(false);
+    expect(n).toBe(2);
+  });
+
+  it("returns Canva's answer when it holds no page structure", async () => {
+    const fake: any = async (_t: string, input: any) =>
+      input.open_transaction ? { isError: false, text: JSON.stringify({ page_metadata: [{ index: 1 }], transaction: { transaction_id: "t" } }) } : { isError: false, text: "Something unexpected" };
+    const r = await doc.canvaDocMap(fake, { design_id: "DAHfakecopy3" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/no page structure.*Something unexpected/);
+  });
+
+  it("reads design_content that arrives as a JSON string", async () => {
+    const fake: any = async (_t: string, input: any) =>
+      input.open_transaction
+        ? { isError: false, text: JSON.stringify({ page_metadata: [{ index: 1 }], transaction: { transaction_id: "t" } }) }
+        : { isError: false, text: JSON.stringify({ design_content: JSON.stringify({ pages: [PAGE] }) }) };
+    const r = await doc.canvaDocMap(fake, { design_id: "DAHfakecopy4" });
+    expect(r.isError).toBe(false);
+    expect(r.text).toContain("p1.t2");
+  });
+});
+
 describe("canva bridge: thumbnails stay images", () => {
+  it("falls back to structured content when there is no text", async () => {
+    const { splitContent } = await import("../tendi/canva.js");
+    expect(splitContent({ content: [], structuredContent: { design_content: { pages: [] } } }).text).toBe('{"design_content":{"pages":[]}}');
+  });
+
   it("splits text and image blocks", async () => {
     const { splitContent } = await import("../tendi/canva.js");
     const r = splitContent({ content: [{ type: "text", text: "{\"ok\":1}" }, { type: "image", data: "aGk=", mimeType: "image/png" }] });

@@ -31,6 +31,7 @@ import path from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { auth, UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { dataDir } from "./state.js";
 import type { AnthropicToolDef } from "./teamleader.js";
@@ -222,7 +223,7 @@ export function masterTemplateGuard(name: string, input: any, ids: string[] = MA
  * (which used to flood the context with tens of thousands of characters).
  */
 export function splitContent(res: any): { text: string; images: { data: string; mimeType: string }[] } {
-  if (!Array.isArray(res?.content)) return { text: JSON.stringify(res), images: [] };
+  if (!Array.isArray(res?.content)) return { text: JSON.stringify(res?.structuredContent ?? res), images: [] };
   const images: { data: string; mimeType: string }[] = [];
   const texts: string[] = [];
   for (const c of res.content) {
@@ -231,6 +232,7 @@ export function splitContent(res: any): { text: string; images: { data: string; 
       if (c.data.length < 4_500_000) images.push({ data: c.data, mimeType: String(c.mimeType || "image/png") });
     } else texts.push(JSON.stringify(c));
   }
+  if (!texts.join("").trim() && res?.structuredContent) texts.push(JSON.stringify(res.structuredContent));
   return { text: texts.join("\n"), images };
 }
 
@@ -328,10 +330,15 @@ export class CanvaBridge {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         if (!this.client) await this.connect();
-        const res: any = await this.client!.callTool({ name: raw, arguments: input || {} }, undefined, { timeout: 120_000 });
+        // A plain tools/call request, without the SDK's client-side check of the answer
+        // against the tool's output schema: a schema mismatch on Canva's side must not
+        // turn a good answer (a page read, an edit result) into an error.
+        const res: any = await this.client!.request({ method: "tools/call", params: { name: raw, arguments: input || {} } }, CallToolResultSchema, { timeout: 120_000 });
         const { text, images } = splitContent(res);
         return { text: text || "(no content)", isError: !!res?.isError, ...(images.length ? { images } : {}) };
       } catch (e: any) {
+        const msg = String(e?.message || e);
+        console.error(`[canva] ${raw} failed (attempt ${attempt + 1}): ${msg.slice(0, 400)}`);
         if (e instanceof UnauthorizedError || /unauthori[sz]ed|401/i.test(String(e?.message))) {
           await this.disconnect();
           return {
@@ -339,9 +346,11 @@ export class CanvaBridge {
             text: "Canva rejected the stored login (token expired or revoked). Ask Niels to reconnect Canva via the /canva/connect link, then try again.",
           };
         }
+        // Canva answered with an error (bad input, rate limit): no point reconnecting.
+        if ([-32600, -32601, -32602, -32603, 429].includes(Number(e?.code)) || /rate.?limit|too many requests/i.test(msg)) return { isError: true, text: `Canva tool ${raw} failed: ${msg}` };
         // Session dropped or transport hiccup: reconnect once, then give up honestly.
         await this.disconnect();
-        if (attempt === 1) return { isError: true, text: `Canva tool ${raw} failed: ${e?.message || e}` };
+        if (attempt === 1) return { isError: true, text: `Canva tool ${raw} failed: ${msg}` };
       }
     }
     return { isError: true, text: `Canva tool ${raw} failed.` };
