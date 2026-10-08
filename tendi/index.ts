@@ -54,8 +54,8 @@ import { buildDocx, DOC_SPEC_SCHEMA, safeFilename } from "./docx.js";
 import { TeamleaderBridge, teamleaderEnabled, type AnthropicToolDef } from "./teamleader.js";
 import { CanvaBridge, canvaConfigured, isCanvaWriteTool, MASTER_TEMPLATE_IDS, masterTemplateGuard } from "./canva.js";
 import { recordUsage, summarizeUsage } from "./usage.js";
-import { downloadPdf, pickDownloadUrl } from "./canva-export.js";
-import { canvaDocFill, canvaDocMap, type CanvaCaller } from "./canva-doc.js";
+import { downloadPdf, exportArgs, pickDownloadUrl } from "./canva-export.js";
+import { canvaDocFill, canvaDocMap, type CanvaConn } from "./canva-doc.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
 import { startScoutService, scoutConfig } from "./scout/service.js";
 import { scoutDigestBlock, scoutItemBlock } from "./scout/handoff.js";
@@ -385,10 +385,9 @@ async function main(): Promise<void> {
       if (TEMPLATE_IDS.has(designId)) return { isError: true, text: "That is a master template. Export the filled copy instead." };
       const tool = ["canva_export-design", "canva_export_design"].find((t) => canva!.has(t));
       if (!tool) return { isError: true, text: "Canva's export tool is not available on this connection. Export from Canva by hand." };
-      const format: any = { type: "pdf" };
-      if (Array.isArray(input?.pages) && input.pages.length) format.pages = input.pages.map(Number).filter((n: number) => n >= 1);
-      if (input?.size) format.size = String(input.size);
-      const res = await canva.call(tool, { design_id: designId, format, user_intent: "Export the filled proposal design as a PDF for the Slack thread" });
+      const pages = Array.isArray(input?.pages) && input.pages.length ? input.pages.map(Number).filter((n: number) => n >= 1) : null;
+      const args = exportArgs(canva.tools.find((t) => t.name === tool)?.input_schema, designId, pages, input?.size ? String(input.size) : null);
+      const res = await canva.call(tool, { ...args, user_intent: "Export the filled proposal design as a PDF for the Slack thread" });
       if (res.isError) return { isError: true, text: `Canva export failed: ${res.text.slice(0, 500)}` };
       const url = pickDownloadUrl(res.text);
       if (!url) return { isError: true, text: `Canva did not return a download link. Its answer: ${res.text.slice(0, 500)}` };
@@ -430,12 +429,16 @@ async function main(): Promise<void> {
       if (!/^D[A-Za-z0-9_-]{10}$/.test(designId)) return { isError: true, text: `"${designId}" is not a Canva design id (11 characters, starts with D).` };
       if (TEMPLATE_IDS.has(designId)) return { isError: true, text: "That is a master template. Copy it first (copy-design, with page_numbers to keep only the pages this proposal needs) and work on the copy." };
       const bridge = canva;
-      const caller: CanvaCaller = async (tool, args) => {
-        const t = [`canva_${tool}`, `canva_${tool.replace(/-/g, "_")}`].find((x) => bridge.has(x));
-        if (!t) return { isError: true, text: `Canva tool ${tool} is not available on this connection.` };
-        return bridge.call(t, args);
+      const nameOf = (tool: string) => [`canva_${tool}`, `canva_${tool.replace(/-/g, "_")}`].find((x) => bridge.has(x));
+      const conn: CanvaConn = {
+        has: (tool) => !!nameOf(tool),
+        call: async (tool, args) => {
+          const t = nameOf(tool);
+          if (!t) return { isError: true, text: `Canva tool ${tool} is not available on this connection.` };
+          return bridge.call(t, args);
+        },
       };
-      const out = name === "canva_doc_map" ? await canvaDocMap(caller, input) : await canvaDocFill(caller, input);
+      const out = name === "canva_doc_map" ? await canvaDocMap(conn, input) : await canvaDocFill(conn, input);
       if (name === "canva_doc_fill" && !out.isError) {
         state.workspace.links[`canva copy ${designId}`] = state.workspace.links[`canva copy ${designId}`] || `https://www.canva.com/design/${designId}/edit`;
         saveThread(state);

@@ -205,3 +205,94 @@ describe("canva bridge: thumbnails stay images", () => {
     expect(r.images).toEqual([{ data: "aGk=", mimeType: "image/png" }]);
   });
 });
+
+// The older Canva tool set (Tendi's connection on 8 Oct 2026). Answer shapes follow canva.dev/docs/mcp/tools.
+const V1_OPEN = {
+  transaction: { status: "open", transaction_id: "TXN1" },
+  edit_design_url: "https://www.canva.com/design/DAHv1copy01/edit",
+  richtexts: [
+    { element_id: "E_FOOT", page_index: 1, regions: [{ type: "text", text: "Peak Nine for Philea · 1 · Understanding" }], containerElement: { type: "text", position: { top: 1080, left: 60 }, dimension: { width: 289, height: 12 } } },
+    { element_id: "E_BRIEF", page_index: 1, regions: [{ type: "text", text: "WHAT WE READ IN YOUR BRIEF\n" }, { type: "text", text: "Philea came out of a merger." }], containerElement: { type: "text", position: { top: 240, left: 60 }, dimension: { width: 327, height: 300 } } },
+    { element_id: "E_BELOW", page_index: 1, regions: [{ type: "text", text: "WHAT WE READ AROUND IT" }], containerElement: { type: "text", position: { top: 560, left: 60 }, dimension: { width: 327, height: 200 } } },
+  ],
+  fills: [{ type: "image", asset_id: "A1", page_index: 1, editable: true, element_id: "E_LOGO" }],
+  thumbnails: [{ width: 424, height: 600, url: "https://export-download.canva.com/thumb1.png" }],
+  pages: [{ page_id: "PG1", page_number: 1, dimension: { width: 794, height: 1123 }, is_responsive: false, is_empty: false, is_editable: true }],
+};
+
+describe("canva-doc: the older Canva tool set", () => {
+  function fakeV1() {
+    const calls: any[] = [];
+    const conn: any = {
+      has: (t: string) => ["start-editing-transaction", "perform-editing-operations", "commit-editing-transaction", "cancel-editing-transaction", "get-design-content"].includes(t),
+      fetchImage: async (url: string) => ({ data: "aGk=", mimeType: "image/png", url }),
+      call: async (tool: string, input: any) => {
+        calls.push({ tool, input });
+        if (tool === "start-editing-transaction") return { isError: false, text: JSON.stringify(V1_OPEN) };
+        if (tool === "perform-editing-operations") {
+          const after = JSON.parse(JSON.stringify(V1_OPEN));
+          after.richtexts[1].containerElement.dimension.height = 420; // the brief box grew into the box below
+          return { isError: false, text: JSON.stringify({ ...after, edit_operation_results: input.operations.map((o: any) => ({ status: "success", operation_info: { type: o.type, element_id: o.element_id } })) }) };
+        }
+        if (tool === "get-design-content") return { isError: false, text: JSON.stringify({ richtexts: [{ regions: [{ text: "Peak Nine for Oxfam" }] }] }) };
+        return { isError: false, text: JSON.stringify({ status: "committed" }) };
+      },
+    };
+    return { conn, calls };
+  }
+
+  it("maps richtexts and fills into keys", async () => {
+    const pages = doc.parseV1(V1_OPEN);
+    expect(pages[0].elements.map((e) => e.key)).toEqual(["p1.t1", "p1.t2", "p1.t3", "p1.i1"]);
+    expect(pages[0].locator).toBe("PG1");
+    const { conn } = fakeV1();
+    const m = await doc.canvaDocMap(conn, { design_id: "DAHv1copy01" });
+    expect(m.isError).toBe(false);
+    expect(m.text).toContain("p1.t1 [top 240");
+    expect(m.text).toMatch(/no styling or image positions/);
+  });
+
+  it("edits with element_id, expands page-wide swaps, fetches the thumbnail and commits with the old tools", async () => {
+    const { conn, calls } = fakeV1();
+    await doc.canvaDocMap(conn, { design_id: "DAHv1copy02" });
+    const f = await doc.canvaDocFill(conn, {
+      design_id: "DAHv1copy02",
+      edits: [{ key: "p1.t1", runs: { "1": "Oxfam asks for a facilitator and rapporteur for two leadership meetings in Bangkok." } }],
+      page_replace: [{ find: "Peak Nine for Philea", replace: "Peak Nine for Oxfam" }],
+    });
+    const edit = calls.find((c) => c.tool === "perform-editing-operations")!;
+    expect(edit.input.page_index).toBe(1);
+    expect(edit.input.operations).toEqual([
+      { type: "find_and_replace_text", element_id: "E_BRIEF", find_text: "Philea came out of a merger.", replace_text: "Oxfam asks for a facilitator and rapporteur for two leadership meetings in Bangkok." },
+      { type: "find_and_replace_text", element_id: "E_FOOT", find_text: "Peak Nine for Philea", replace_text: "Peak Nine for Oxfam" },
+    ]);
+    expect(f.text).toMatch(/Page 1: 2 changes/);
+    expect(f.text).not.toMatch(/problem/); // "success" is fine
+    expect(f.text).toMatch(/p1\.t1 grew 120 px and now overlaps p1\.t2/);
+    expect(f.images).toHaveLength(1);
+    const c = await doc.canvaDocFill(conn, { design_id: "DAHv1copy02", finalize: "commit", check_terms: ["Philea"] });
+    expect(calls.some((x) => x.tool === "commit-editing-transaction" && x.input.transaction_id === "TXN1")).toBe(true);
+    expect(c.text).toMatch(/No leftovers found for: Philea/);
+  });
+
+  it("never replaces a whole multi-run box on the old tools (no styling to check)", async () => {
+    const map = { designId: "D", transactionId: "t", pages: doc.parseV1(V1_OPEN), at: 0 };
+    const { problems } = doc.planFill(map, [{ key: "p1.t1", text: "flat" }]);
+    expect(problems.join(" ")).toMatch(/different styles/);
+  });
+
+  it("says which tools are missing when neither set is there", async () => {
+    const r = await doc.canvaDocMap({ has: () => false, call: async () => ({ isError: true, text: "" }) } as any, { design_id: "DAHnothing01" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/neither read-design/);
+  });
+});
+
+describe("canva export: arguments follow the tool's schema", () => {
+  it("object format for the newer tool, string format for an older one", async () => {
+    const { exportArgs } = await import("../tendi/canva-export.js");
+    expect(exportArgs({ properties: { format: { type: "object" } } }, "DAH1", [1, 2], "a4")).toEqual({ design_id: "DAH1", format: { type: "pdf", pages: [1, 2], size: "a4" } });
+    expect(exportArgs({ properties: { format: { type: "string" }, pages: { type: "array" } } }, "DAH1", [1, 2], "a4")).toEqual({ design_id: "DAH1", format: "pdf", pages: [1, 2] });
+    expect(exportArgs(undefined, "DAH1", null, null)).toEqual({ design_id: "DAH1", format: { type: "pdf" } });
+  });
+});

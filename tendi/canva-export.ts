@@ -31,3 +31,24 @@ export async function downloadPdf(url: string, maxBytes = 60 * 1024 * 1024): Pro
   }
 }
 
+
+/**
+ * Arguments for Canva's export-design, shaped after the tool's own input schema:
+ * the newer tool takes format as an object {type, pages, size}; an older one may
+ * take format as a plain string with pages and size beside it.
+ */
+export function exportArgs(schema: any, designId: string, pages: number[] | null, size: string | null): Record<string, any> {
+  const props = schema?.properties || {};
+  const fmt = props.format;
+  const fmtIsString = fmt && (fmt.type === "string" || Array.isArray(fmt.enum));
+  if (fmtIsString) {
+    const out: Record<string, any> = { design_id: designId, format: "pdf" };
+    if (pages && props.pages) out.pages = pages;
+    if (size && props.size) out.size = size;
+    return out;
+  }
+  const format: Record<string, any> = { type: "pdf" };
+  if (pages) format.pages = pages;
+  if (size) format.size = size;
+  return { design_id: designId, format };
+}
