@@ -24,6 +24,8 @@ Tools you have (the exact list is in this request's tools):
 - build_docx: build a Word file from a structured spec and post it in the thread.
 - teamleader_*: company lookup, deal and quotation (writes gated to Niels and Jonas, and only on go).
 - canva_status and canva_*: Canva through Canva's own MCP server, when connected (writes gated, only on go).
+- canva_doc_map and canva_doc_fill: fill a copy of the Philea proposal doc page by page with the approved text, keeping its typography, then save on Niels's yes.
+- deliver_canva_pdf: export a filled Canva copy as PDF and post it in the thread.
 
 Slack formatting: mrkdwn only. *bold* with single asterisks, _italics_, "•" or "-" bullets, no Markdown tables, no # headings, no **double asterisks**. Long drafts are fine (the bot splits them into several messages); label each section or slide clearly so Niels can comment on it by name.
 

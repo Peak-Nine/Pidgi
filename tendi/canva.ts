@@ -216,6 +216,24 @@ export function masterTemplateGuard(name: string, input: any, ids: string[] = MA
   return null;
 }
 
+/**
+ * Text and images of an MCP tool result. Canva's edit and read tools return page
+ * thumbnails as image blocks; those go to the model as images, never as base64 text
+ * (which used to flood the context with tens of thousands of characters).
+ */
+export function splitContent(res: any): { text: string; images: { data: string; mimeType: string }[] } {
+  if (!Array.isArray(res?.content)) return { text: JSON.stringify(res), images: [] };
+  const images: { data: string; mimeType: string }[] = [];
+  const texts: string[] = [];
+  for (const c of res.content) {
+    if (typeof c?.text === "string") texts.push(c.text);
+    else if (c?.type === "image" && typeof c.data === "string") {
+      if (c.data.length < 4_500_000) images.push({ data: c.data, mimeType: String(c.mimeType || "image/png") });
+    } else texts.push(JSON.stringify(c));
+  }
+  return { text: texts.join("\n"), images };
+}
+
 function toolName(raw: string): string {
   return ("canva_" + raw).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
 }
@@ -304,17 +322,15 @@ export class CanvaBridge {
     return this.rawNames.has(name);
   }
 
-  async call(name: string, input: any): Promise<{ text: string; isError: boolean }> {
+  async call(name: string, input: any): Promise<{ text: string; isError: boolean; images?: { data: string; mimeType: string }[] }> {
     const raw = this.rawNames.get(name);
     if (!raw) return { isError: true, text: `Unknown Canva tool ${name}.` };
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         if (!this.client) await this.connect();
         const res: any = await this.client!.callTool({ name: raw, arguments: input || {} }, undefined, { timeout: 120_000 });
-        const text = Array.isArray(res?.content)
-          ? res.content.map((c: any) => (typeof c?.text === "string" ? c.text : JSON.stringify(c))).join("\n")
-          : JSON.stringify(res);
-        return { text: text || "(no content)", isError: !!res?.isError };
+        const { text, images } = splitContent(res);
+        return { text: text || "(no content)", isError: !!res?.isError, ...(images.length ? { images } : {}) };
       } catch (e: any) {
         if (e instanceof UnauthorizedError || /unauthori[sz]ed|401/i.test(String(e?.message))) {
           await this.disconnect();

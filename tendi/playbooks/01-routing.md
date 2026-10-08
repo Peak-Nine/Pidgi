@@ -8,7 +8,7 @@ Three playbooks exist. Decide which one applies from the briefing and the reques
 
 1. **Proof of Change proposal** (02-proof-of-change.md): the engagement is about moving a grant-funded intervention beyond the grant, financial sustainability, self-sustaining models, exit from donor funding, or scaling an impact intervention. Typical client: donor, NGO, foundation asking for a sustainable economic or business model for an existing intervention. Deliverable: a filled Canva deck (template DAHRT8eVhhA). Word file only when asked.
 2. **New proposal, modular template** (03-new-proposal.md): general Peak Nine engagements such as a coop venture studio, an impact innovation program, a system challenge sprint, research and discovery. Deliverables: Canva deck (template DAHKhE6U2vk) plus a short Word pre-read, then optionally the Teamleader deal and quotation.
-3. **RFP from the Philea template** (04-rfp-philea.md): a formal RFP or tender with evaluation criteria, portal upload slots, deadlines and a procurement contact. Deliverable: a master proposal document in the Philea structure (Word draft first, then the Canva doc copy DAHWFiZkv6w), split into the portal's upload slots.
+3. **RFP from the Philea template** (04-rfp-philea.md): a formal RFP or tender with evaluation criteria, portal upload slots, deadlines and a procurement contact. Deliverable: the proposal built in Canva on a copy of the Philea doc DAHWFiZkv6w, tailored to this tender, plus its PDF in the thread. Word only when Niels asks or for portal slots that want .docx.
 
 If it is unclear which applies, ask one short question before doing anything else. Do not guess between Proof of Change and the modular proposal; the skills explicitly say to ask.
 

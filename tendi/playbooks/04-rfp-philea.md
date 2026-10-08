@@ -1,9 +1,9 @@
 # Playbook: RFP proposal from the Philea template
 
-Take a new RFP or tender, write a Peak Nine proposal in the structure, tone and look of the Philea proposal, and hand back a master file plus the separate files the portal asks for. The Philea pair is the reference for structure, tone and look. The originals are never edited.
+Take a new RFP or tender, write a Peak Nine proposal in the structure, tone and look of the Philea proposal, build it in Canva on a copy of the Philea doc tailored to this tender, and hand back the Canva link and the PDF (plus the separate files the portal asks for). The Philea pair is the reference for structure, tone and look. The originals are never edited.
 
 Source designs in Canva (always copy, never touch):
-- Philea proposal doc, fixed pages, API-editable: Canva ID `DAHWFiZkv6w`
+- Philea proposal doc, 22 fixed pages, editable text: Canva ID `DAHWFiZkv6w`. The proposal itself is built on a copy of it (step 5)
 - Philea V1 methodology poster, whiteboard: Canva ID `DAHWICf3ANs`. Its text is changed with whole-poster find-and-replace (see step 6), not element by element
 
 Standing rules for every line (on top of 00-voice.md):
@@ -61,11 +61,52 @@ Day estimate: build it bottom-up per phase and show the total. Mark travel and e
 
 Post the master text in the thread for Niels's pass. Iterate.
 
-## Step 5. Build the files (on go)
+## Step 5. Build the proposal in Canva (on go)
 
-Draft 1 goes out as a Word file via `build_docx` (Peak Nine document design: page background #F0E7DD, dark green #1E3A2F table headers, small-caps section labels, footer "Peak Nine for <client> · <section>"). Name it "Peak Nine for <client> - Technical and Financial Proposal.docx". The portal split (one file per upload slot) is done by Niels from the master, or by Tendi as separate `build_docx` calls, one per slot, named "<slot number> <slot name> - Peak Nine for <client>.docx", when he asks.
+The proposal is made in Canva, on a copy of the Philea doc, and goes out as the PDF of that copy. Word (`build_docx`) only when Niels asks for it, or for a portal slot that demands .docx.
 
-After Niels has marked up draft 1 and Canva is connected: copy `DAHWFiZkv6w`, read the copy to get the text locators, replace the text block by block, show what changed, commit on his yes, and return the edit URL. Then deliver the on-brand PDF of the copy with `deliver_canva_pdf` ("Peak Nine for <client> - Technical and Financial Proposal.pdf"). If export fails, give the edit URL and say the PDF is exported from Canva by hand.
+The Philea doc is a skeleton to tailor, not a form to fill. Keep its structure, tone and typography; change everything that belongs to Philea; leave out what this tender does not need; reshape what is there when the content asks for it. A 15-day single-consultant assignment does not get a three-person team page or a 14-month work plan with Philea's ten phases.
+
+The 22 pages of `DAHWFiZkv6w` (read on 8 Oct 2026):
+1. Cover: date line, title + "How might we" question (one box, two styles), Philea logo next to "Peak Nine for" (image p1.i, delete or swap by hand), background photo
+2. Cover letter ("Hi there! Nice to meet you"), signature, links, the personal video block (Philea-specific: delete its boxes unless Niels records a new video) and the team photo
+3. Our approach on one page: the poster image and its link. Only when a filled poster copy exists; otherwise leave the page out
+4. Understanding 1: what we read in the brief, what we read around it (client research with links)
+5. Understanding 2: "How might we" question cards (seven)
+6. Methodology: executive overview, two workstreams
+7. Methodology: the five-question test, how we work with you, design principles as commitments, deliverables list
+8. Methodology: key ingredients, iteration, Mini-Expo, pulse survey (Philea options)
+9. Work plan table: phases, what happens, milestones, days, total
+10. Team: skills grid and three bios (Jonas, Bertille, Niels)
+11. Case: KBF Problematic Debt Fund (facilitation of a governance-level strategy process)
+12. Case: OpenTeleRehab with HI and Enabel (strategy evaluation)
+13. Case: undisclosed corporate foundation (positioning, foresight)
+14. Financial proposal: headline figures, fees by phase table, budget by cost category, terms link
+15. Closing: contacts Niels and Jonas
+16 to 17. CV Niels · 18 to 19. CV Jonas · 20 to 21. CV Bertille
+22. Back cover
+
+The tables on pages 9 and 14 are separate text boxes on top of a table image: rows cannot be added or removed. Fill the rows you need, empty the rest (delete their boxes) and tell Niels which empty rows to hide by hand, or keep a phase structure that fits the rows.
+
+How to do it:
+1. Page plan. From the approved master text (step 4), decide per Philea page: keep and rewrite, keep as is (CVs, cases that fit), or leave out. Post the plan in a few lines (which page carries which section, what is left out, what will be shortened to fit) and wait for Niels's go. Pages cannot be deleted later, so the plan decides the copy.
+2. Copy only the kept pages: `copy-design` on `DAHWFiZkv6w` with `page_numbers` in the planned order. Save the copy's id and edit URL in the workspace links.
+3. `canva_doc_map` on the copy. It lists every text box with a key, its size, and its styled runs.
+4. Write the edits with `canva_doc_fill`, a few pages per call:
+   - rewrite run by run (`runs`), so labels stay labels and bold lead-ins stay bold. A run can hold several paragraphs with line breaks. Only use `text` on a box with one style.
+   - stay close to the length of each box; a box that gets much longer grows downwards into whatever sits below it. If the content does not fit, cut it in the box and keep the fuller version in the thread.
+   - `clear_links` on every box that still links to Philea pages; write the new client's sources as plain text or keep the link off.
+   - `delete` boxes and images that have no place in this proposal (Philea logo, video block, Mini-Expo box when there is no Mini-Expo).
+   - `page_replace` for phrases on every page, such as the footer "Peak Nine for Philea" and "Philea" in running heads. Use it last and only for phrases that mean the same everywhere.
+   - fix the page numbers in the footers and the "see p8" cross-references once the page plan is final.
+5. Look at every thumbnail and every warning the fill returns. Fix overflow, overlaps and clumsy breaks with another `canva_doc_fill` before Niels sees anything.
+6. Preview in the thread: the copy's edit link, what was filled page by page in one line each, what was shortened, what stays manual (logo, photos, empty table rows, anything you could not fit). Ask for a yes to save.
+7. On yes: `canva_doc_fill` with `finalize: "commit"` and `check_terms` (at least: Philea, Turin, General Assembly, strategy cell, Board task force, Mini-Expo, philea.eu, the old dates). Leftovers it reports get fixed in a new map and fill, again with his yes.
+8. Then `deliver_canva_pdf` on the copy ("Peak Nine for <client> - Technical and Financial Proposal.pdf"). Give the edit link with it.
+
+If the editing session expired between the preview and his yes, `canva_doc_fill` says so: run it again with `reapply: true` and `finalize: "commit"`. If Canva is not connected, deliver the master text as Word and say the Canva version waits for the connection.
+
+Portal splits: one PDF per upload slot through `deliver_canva_pdf` with `pages`, named "<slot number> <slot name> - Peak Nine for <client>.pdf", when the portal has separate slots.
 
 ## Step 6. The poster
 

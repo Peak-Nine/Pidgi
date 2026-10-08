@@ -55,6 +55,7 @@ import { TeamleaderBridge, teamleaderEnabled, type AnthropicToolDef } from "./te
 import { CanvaBridge, canvaConfigured, isCanvaWriteTool, MASTER_TEMPLATE_IDS, masterTemplateGuard } from "./canva.js";
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { downloadPdf, pickDownloadUrl } from "./canva-export.js";
+import { canvaDocFill, canvaDocMap, type CanvaCaller } from "./canva-doc.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
 import { startScoutService, scoutConfig } from "./scout/service.js";
 import { scoutDigestBlock, scoutItemBlock } from "./scout/handoff.js";
@@ -75,6 +76,18 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
+/** Tool output for the model: text, plus page thumbnails as real images (at most 24). */
+function toolResultContent(out: { text: string; images?: { data: string; mimeType: string }[] }): Anthropic.ToolResultBlockParam["content"] {
+  const text = out.text.slice(0, 80_000);
+  const ok = /^image\/(png|jpeg|gif|webp)$/;
+  const imgs = (out.images || []).filter((i) => ok.test(i.mimeType)).slice(-24);
+  if (!imgs.length) return text;
+  return [
+    { type: "text", text },
+    ...imgs.map((i) => ({ type: "image" as const, source: { type: "base64" as const, media_type: i.mimeType as "image/png", data: i.data } })),
+  ];
+}
+
 const MODEL = process.env.TENDI_MODEL || "claude-opus-4-8";
 const MAX_TOKENS = Number(process.env.TENDI_MAX_TOKENS) || 16000;
 const MAX_STEPS = Number(process.env.TENDI_MAX_STEPS) || 30;
@@ -88,6 +101,8 @@ const WRITE_ALLOWLIST = (process.env.TENDI_WRITE_ALLOWLIST || "")
 const TL_WRITE_PATTERN = /(create|update|delete|win|lose|move|accept|send|duplicate|tag|untag|link|unlink)/i;
 function isWriteTool(name: string): boolean {
   if (name.startsWith("teamleader_")) return TL_WRITE_PATTERN.test(name);
+  if (name === "canva_doc_fill") return true;
+  if (name === "canva_doc_map") return false;
   if (name.startsWith("canva_")) return isCanvaWriteTool(name);
   return false;
 }
@@ -221,6 +236,52 @@ async function main(): Promise<void> {
       },
     },
     {
+      name: "canva_doc_map",
+      description:
+        "Open an editing session on a Canva COPY with fixed pages (the Philea proposal doc copy) and list every text box with a key (p4.t2), its size and position, and its styled runs (r0, r1...) with their text, plus images (p1.i1). Call it after copy-design and before canva_doc_fill. Never on a master template. Optional pages to map only some pages.",
+      input_schema: {
+        type: "object",
+        properties: {
+          design_id: { type: "string", description: "Design id of the copy (starts with D)." },
+          pages: { type: "array", items: { type: "integer" }, description: "Optional 1-based pages; omit for all." },
+        },
+        required: ["design_id"],
+      },
+    },
+    {
+      name: "canva_doc_fill",
+      description:
+        "Write new text into the mapped Canva copy, by key, keeping the template's typography. Per box give new text per run (runs: {\"1\": \"...\"}) so labels, bold lead-ins, bullets and body keep their style; use text only for a box with one style. clear_links removes old client links in a box; delete removes a box or image. page_replace swaps a phrase on every page (or one page), e.g. the footer 'Peak Nine for Philea'. Returns per page what changed, boxes that grew past the page or into the box below, and a thumbnail of each edited page: look at them and fix before asking Niels. Changes stay unsaved (finalize keep_open) until Niels says yes; then call again with finalize commit and check_terms (old client name, old dates, old places) to save and scan for leftovers. finalize cancel discards. reapply: true redoes the stored edits when the editing session expired.",
+      input_schema: {
+        type: "object",
+        properties: {
+          design_id: { type: "string" },
+          edits: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string", description: "Element key from canva_doc_map, e.g. p4.t2." },
+                runs: { type: "object", description: "New text per run index, e.g. {\"0\": \"LABEL\", \"1\": \"Body text\"}. Empty string removes the run's text.", additionalProperties: { type: "string" } },
+                text: { type: "string", description: "Whole new text, only for a box with a single style." },
+                clear_links: { type: "boolean" },
+                delete: { type: "boolean" },
+              },
+              required: ["key"],
+            },
+          },
+          page_replace: {
+            type: "array",
+            items: { type: "object", properties: { page: { type: "integer" }, find: { type: "string" }, replace: { type: "string" } }, required: ["find", "replace"] },
+          },
+          finalize: { type: "string", enum: ["keep_open", "commit", "cancel"], description: "Default keep_open. commit only after Niels said yes to the preview." },
+          check_terms: { type: "array", items: { type: "string" }, description: "With commit: words that must be gone, e.g. Philea, Turin, General Assembly." },
+          reapply: { type: "boolean" },
+        },
+        required: ["design_id"],
+      },
+    },
+    {
       name: "canva_status",
       description:
         "Check whether Canva is connected to Tendi and how many Canva tools are available. Call this before planning any Canva step. If not connected, tell Niels that an admin opens the /canva/connect link once (see the README); meanwhile deliver the drafts, the Word file and a manual Canva checklist.",
@@ -260,7 +321,7 @@ async function main(): Promise<void> {
     threadTs?: string;
   }
 
-  async function callTool(name: string, input: any, slackUserId: string, state: ThreadState, ctx: TurnCtx): Promise<{ text: string; isError: boolean }> {
+  async function callTool(name: string, input: any, slackUserId: string, state: ThreadState, ctx: TurnCtx): Promise<{ text: string; isError: boolean; images?: { data: string; mimeType: string }[] }> {
     if (isWriteTool(name) && !writeAllowed(slackUserId)) {
       return {
         isError: true,
@@ -362,6 +423,24 @@ async function main(): Promise<void> {
       if (!teamleader) return { isError: true, text: "Teamleader is not configured on this Tendi instance." };
       return teamleader.call(name, input);
     }
+    if (name === "canva_doc_map" || name === "canva_doc_fill") {
+      if (!canva || !canva.connected()) return { isError: true, text: "Canva is not connected. Check canva_status." };
+      const designId = String(input?.design_id || "").trim();
+      if (!/^D[A-Za-z0-9_-]{10}$/.test(designId)) return { isError: true, text: `"${designId}" is not a Canva design id (11 characters, starts with D).` };
+      if (TEMPLATE_IDS.has(designId)) return { isError: true, text: "That is a master template. Copy it first (copy-design, with page_numbers to keep only the pages this proposal needs) and work on the copy." };
+      const bridge = canva;
+      const caller: CanvaCaller = async (tool, args) => {
+        const t = [`canva_${tool}`, `canva_${tool.replace(/-/g, "_")}`].find((x) => bridge.has(x));
+        if (!t) return { isError: true, text: `Canva tool ${tool} is not available on this connection.` };
+        return bridge.call(t, args);
+      };
+      const out = name === "canva_doc_map" ? await canvaDocMap(caller, input) : await canvaDocFill(caller, input);
+      if (name === "canva_doc_fill" && !out.isError) {
+        state.workspace.links[`canva copy ${designId}`] = state.workspace.links[`canva copy ${designId}`] || `https://www.canva.com/design/${designId}/edit`;
+        saveThread(state);
+      }
+      return out;
+    }
     if (name.startsWith("canva_")) {
       if (!canva) return { isError: true, text: "Canva is not configured on this Tendi instance." };
       const blocked = masterTemplateGuard(name, input);
@@ -429,13 +508,15 @@ async function main(): Promise<void> {
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         for (const block of resp.content) {
           if (block.type === "tool_use") {
-            let out: { text: string; isError: boolean };
+            let out: { text: string; isError: boolean; images?: { data: string; mimeType: string }[] };
+            // Filling or checking a 20-page Canva copy runs one Canva call per page.
+            const limit = block.name === "canva_doc_fill" || block.name === "canva_doc_map" ? 900_000 : 180_000;
             try {
-              out = await withTimeout(callTool(block.name, block.input, slackUserId, state, ctx), 180_000, `Tool ${block.name}`);
+              out = await withTimeout(callTool(block.name, block.input, slackUserId, state, ctx), limit, `Tool ${block.name}`);
             } catch (e: any) {
               out = { isError: true, text: `Tool ${block.name} did not finish: ${e?.message || e}` };
             }
-            toolResults.push({ type: "tool_result", tool_use_id: block.id, content: out.text.slice(0, 80_000), is_error: out.isError });
+            toolResults.push({ type: "tool_result", tool_use_id: block.id, content: toolResultContent(out), is_error: out.isError });
           }
         }
         messages.push({ role: "user", content: toolResults });
