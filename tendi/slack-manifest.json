@@ -1,0 +1,55 @@
+{
+  "display_information": {
+    "name": "Tendi",
+    "description": "Peak Nine's proposal assistant: briefings and tenders in, proposals out.",
+    "background_color": "#1E3A2F"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Tendi",
+      "always_online": true
+    },
+    "app_home": {
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "chat:write",
+        "im:history",
+        "im:read",
+        "im:write",
+        "channels:history",
+        "groups:history",
+        "files:read",
+        "files:write",
+        "users:read",
+        "users:read.email",
+        "reactions:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://REPLACE-WITH-YOUR-RENDER-HOST/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.im",
+        "message.channels",
+        "message.groups",
+        "reaction_added",
+        "reaction_removed"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false,
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://REPLACE-WITH-YOUR-RENDER-HOST/slack/events"
+    }
+  }
+}

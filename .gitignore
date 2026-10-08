@@ -19,3 +19,7 @@ STATUS.md
 BACKLOG.md
 DASHBOARD.md
 .current-prompt.md
+
+# Tendi: Canva login tokens written by `npm run tendi:canva-login`
+tendi/.canva-oauth.json
+*.canva-oauth.json
