@@ -14,6 +14,10 @@
  * If the markup changes, the parser returns nothing and the run notes say so;
  * nothing breaks. Above-threshold Enabel contracts also appear on TED.
  */
+import { spawn } from "child_process";
+import { unlinkSync, writeFileSync } from "fs";
+import os from "os";
+import path from "path";
 import * as cheerio from "cheerio";
 import { politeFetch, politeFetchBytes } from "../http.js";
 import type { FetchContext, Opportunity, SourceAdapter, SourceResult } from "../types.js";
@@ -114,23 +118,61 @@ export const enabelAdapter: SourceAdapter = {
   },
 };
 
+/** The tender specifications PDF among the attachments (not the invitation letter or an annex form). */
+export function pickTenderPdf(attachments: string[] = []): string | undefined {
+  const pdfs = attachments.filter((a) => /\.pdf(\?|$)/i.test(a));
+  return pdfs.find((a) => /(csc|cahier|tender[-_ ]?spec|specification|\btdr\b|_tdr|tor[-_]|terms[-_ ]of[-_ ]ref)/i.test(a)) || pdfs.find((a) => !/(invitation|annex|annexe|form|formulaire)/i.test(a)) || pdfs[0];
+}
+
+export const PDF_HELPER = path.join(__dirname, "..", "pdf-pages.mjs");
+
+/** Run the PDF helper in its own Node process (memory capped, killed after 60 s). */
+export function runPdfHelper(file: string, maxPages = 12, timeoutMs = 60_000): Promise<{ ok: boolean; text?: string; pages?: number[]; sections?: Record<string, number | null>; total?: number; error?: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ["--max-old-space-size=160", PDF_HELPER, file, String(maxPages)], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (d) => {
+      if (out.length < 500_000) out += d;
+    });
+    child.stderr.on("data", () => undefined);
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: e.message });
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      const last = out.trim().split("\n").pop() || "";
+      try {
+        resolve(JSON.parse(last));
+      } catch {
+        resolve({ ok: false, error: `pdf helper stopped (${signal || `exit ${code}`})` });
+      }
+    });
+  });
+}
+
 /**
- * Pull the first pages of a tender PDF so the scorer has more than a title.
- * Only called for shortlisted Enabel items, capped per run by the caller.
+ * Read the decisive parts of a tender PDF: cover (deadline), award criteria,
+ * terms of reference and selection criteria, found through the table of
+ * contents. Download here (polite, budgeted), parsing in a separate process.
  */
-export async function enrichFromPdf(item: Opportunity, maxChars = 6000): Promise<string> {
-  const pdf = (item.attachments || []).find((a) => /\.pdf(\?|$)/i.test(a));
-  if (!pdf) return "";
-  const { PDFParse } = await import("pdf-parse");
-  const r = await politeFetchBytes(pdf, { budget: 12 });
-  if (!r.ok) return "";
-  const parser = new PDFParse({ data: new Uint8Array(r.bytes) });
+export async function readTenderPdf(item: Opportunity, maxChars = 30_000): Promise<{ text: string; pages: number[] } | null> {
+  const pdf = pickTenderPdf(item.attachments);
+  if (!pdf) return null;
+  const r = await politeFetchBytes(pdf, { budget: 45 });
+  if (!r.ok || !r.bytes.length) return null;
+  const tmp = path.join(os.tmpdir(), `scout-${process.pid}-${Date.now()}.pdf`);
+  writeFileSync(tmp, r.bytes);
   try {
-    const t = await parser.getText({ first: 6 } as any);
-    return String(t.text || "").replace(/\s+/g, " ").slice(0, maxChars);
-  } catch {
-    return "";
+    const res = await runPdfHelper(tmp);
+    if (!res.ok || !res.text) throw new Error(res.error || "no text in PDF");
+    return { text: res.text.slice(0, maxChars), pages: res.pages || [] };
   } finally {
-    await parser.destroy().catch(() => undefined);
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
   }
 }

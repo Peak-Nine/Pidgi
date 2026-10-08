@@ -160,6 +160,15 @@ describe("scout/sources", () => {
   });
 });
 
+describe("scout/scorer batches", () => {
+  it("scores items with a document excerpt two at a time", async () => {
+    const { makeBatches } = await import("../tendi/scout/scorer.js");
+    const items = [{ id: "a", details: "x" }, { id: "b" }, { id: "c", details: "y" }, { id: "d", details: "z" }, { id: "e" }];
+    const b = makeBatches(items as any, 10, 2);
+    expect(b.map((x: any[]) => x.map((o) => o.id))).toEqual([["a", "c"], ["d"], ["b", "e"]]);
+  });
+});
+
 describe("scout/scorer", () => {
   it("fills in missing scores and adds deadline flags itself", async () => {
     const { normalizeScores, verdictFor } = await import("../tendi/scout/scorer.js");
@@ -255,6 +264,51 @@ describe("scout/run + store + digest", () => {
   });
 });
 
+describe("scout/pdf reader", () => {
+  const TOC = [
+    "1 General Remarks ............................................................ 5",
+    "3 Award Procedure ............................................................ 8",
+    "15. Award criteria ........................................................... 14",
+    "4 Special Contractual Provisions ............................................. 16",
+    "5 Terms of reference ......................................................... 25",
+    "6 Selection file ............................................................. 33",
+    "7 Overview of the documents to be submitted ................................. 35",
+  ].join("\n");
+
+  it("finds the decisive pages through the table of contents", async () => {
+    const mod: any = await import("../tendi/scout/pdf-pages.mjs" + "");
+    const entries = mod.tocEntries(TOC);
+    expect(entries.length).toBe(7);
+    const pick = mod.pickPages(entries, 43, 12);
+    expect(pick.sections).toEqual({ award: 14, tor: 25, selection: 33 });
+    expect(pick.pages).toEqual([1, 2, 14, 15, 25, 26, 27, 28, 29, 30, 33, 34]);
+  });
+
+  it("works on the French Enabel template too", async () => {
+    const mod: any = await import("../tendi/scout/pdf-pages.mjs" + "");
+    const fr = "15. Critères d'attribution .............................. 14\n5 Termes de référence ................................. 27\n6 Dossier de sélection ..............................31\n7 Récapitulatif des documents à remettre ............. 34";
+    const pick = mod.pickPages(mod.tocEntries(fr), 51, 12);
+    expect(pick.sections).toEqual({ award: 14, tor: 27, selection: 31 });
+    expect(pick.pages).toContain(31);
+    expect(pick.pages).not.toContain(34);
+  });
+
+  it("picks the tender specifications among the attachments", async () => {
+    const { pickTenderPdf } = await import("../tendi/scout/sources/enabel.js");
+    expect(pickTenderPdf(["https://x/BFA-PUB_Invitation.pdf", "https://x/BFA-CSC_PUB.pdf"])).toBe("https://x/BFA-CSC_PUB.pdf");
+    expect(pickTenderPdf(["https://x/a.docx"])).toBeUndefined();
+  });
+
+  it("a broken PDF stops only the helper process", async () => {
+    const { runPdfHelper } = await import("../tendi/scout/sources/enabel.js");
+    const { writeFileSync } = await import("fs");
+    const f = path.join(os.tmpdir(), `not-a-pdf-${Date.now()}.pdf`);
+    writeFileSync(f, "hello, this is not a pdf");
+    const r = await runPdfHelper(f, 12, 30_000);
+    expect(r.ok).toBe(false);
+  }, 40_000);
+});
+
 describe("scout/env", () => {
   it("honours an explicit 0", async () => {
     const { envInt } = await import("../tendi/scout/env.js");
@@ -289,6 +343,11 @@ describe("scout/service", () => {
     expect(completedOn("2026-10-08", [{ finishedAt: at, trigger: "manual", posted: 0 }], "Europe/Brussels")).toBe(false);
     expect(completedOn("2026-10-08", [{ finishedAt: at, trigger: "manual", posted: 5 }], "Europe/Brussels")).toBe(true);
     expect(completedOn("2026-10-09", [{ finishedAt: at, trigger: "schedule", posted: 3 }], "Europe/Brussels")).toBe(false);
+    // Monday and Thursday by default, looking back far enough to cover the gap
+    const { lookbackFor } = await import("../tendi/scout/service.js");
+    expect(scoutConfig({ SCOUT_CHANNEL: "C1" } as any).days).toEqual([1, 4]);
+    expect(lookbackFor([1, 4])).toBe(5);
+    expect(lookbackFor([1, 2, 3, 4, 5])).toBe(4);
     expect(scoutConfig({} as any).enabled).toBe(false);
     expect(verdictFromReaction("+1::skin-tone-3")).toBe("up");
     expect(verdictFromReaction("thumbsdown")).toBe("down");

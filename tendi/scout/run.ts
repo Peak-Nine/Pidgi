@@ -6,20 +6,21 @@
  *
  * Posting to Slack lives in digest.ts so the CLI can dry-run without a token.
  * Budgets per run (env, defaults in brackets): SCOUT_LOOKBACK_DAYS [3],
- * SCOUT_MAX_SCORE_PER_RUN [60], SCOUT_ENABEL_PDF_MAX [0].
+ * SCOUT_MAX_SCORE_PER_RUN [30 per day of lookback], SCOUT_ENABEL_PDF_MAX [30].
  *
- * Why PDF reading is off by default: measured on 8 Oct 2026, reading six Enabel
- * tender PDFs pushed the process from about 180 MB to about 650 MB, and Tendi's
- * Render instance has 512 MB in total. Two scheduled runs died with "out of
- * memory" before posting. The first pages of those PDFs are mostly boilerplate
- * anyway; the scorer works from the title and says when that is all it had.
+ * Enabel tender PDFs: on 8 Oct 2026 reading six of them inside this process took
+ * it from about 180 MB to 650 MB, past Render's 512 MB, and both scheduled runs
+ * died. They are now read one at a time by a separate helper process
+ * (scout/pdf-pages.mjs, about 150 MB peak, killed after 60 s), and only the pages
+ * that decide a bid: cover, award criteria, terms of reference, selection file.
  */
 import type Anthropic from "@anthropic-ai/sdk";
 import { envInt } from "./env.js";
 import { prefilter } from "./filter.js";
+import { memoryHeadroomMb } from "./memory.js";
 import { resetBudgets } from "./http.js";
 import { scoreOpportunities } from "./scorer.js";
-import { enabelAdapter, enrichFromPdf } from "./sources/enabel.js";
+import { enabelAdapter, readTenderPdf } from "./sources/enabel.js";
 import { reliefwebAdapter } from "./sources/reliefweb.js";
 import { tedAdapter } from "./sources/ted.js";
 import { undpAdapter } from "./sources/undp.js";
@@ -39,6 +40,8 @@ export interface RunOptions {
   sources?: string[];
   log?: (line: string) => void;
   now?: Date;
+  /** Days to look back when SCOUT_LOOKBACK_DAYS is not set (the schedule passes the gap between runs). */
+  lookbackDays?: number;
   /** Tests only: use these adapters instead of the real sources. */
   adapters?: SourceAdapter[];
 }
@@ -78,10 +81,10 @@ export function scoringOrder(a: { o: Opportunity; p: number }, b: { o: Opportuni
 export async function runScout(opts: RunOptions): Promise<RunResult> {
   const now = opts.now || new Date();
   const log = opts.log || ((l: string) => console.log(`[scout] ${l}`));
-  const lookback = envInt("SCOUT_LOOKBACK_DAYS", 3) || 3;
+  const lookback = envInt("SCOUT_LOOKBACK_DAYS", opts.lookbackDays || 3) || 3;
   const since = opts.since || isoDaysAgo(lookback, now);
-  const maxScore = envInt("SCOUT_MAX_SCORE_PER_RUN", 60) || 60;
-  const pdfMax = Math.max(0, envInt("SCOUT_ENABEL_PDF_MAX", 0));
+  const maxScore = envInt("SCOUT_MAX_SCORE_PER_RUN", Math.min(200, 30 * lookback)) || 60;
+  const pdfMax = Math.max(0, envInt("SCOUT_ENABEL_PDF_MAX", 30));
   const startedAt = Date.now();
   const notes: string[] = [];
   const errors: string[] = [];
@@ -129,21 +132,36 @@ export async function runScout(opts: RunOptions): Promise<RunResult> {
   const overflow = kept.slice(maxScore);
   if (overflow.length) notes.push(`${overflow.length} items left for the next run (SCOUT_MAX_SCORE_PER_RUN=${maxScore})`);
 
-  // Optional: a few Enabel PDFs so the scorer sees more than a title. Off by default (memory, see top).
+  // Enabel: read the decisive pages of each shortlisted tender PDF (separate process, see top).
   let pdfs = 0;
+  let pdfFails = 0;
+  // The helper needs about 150 MB; skip it when the container is close to its limit.
+  const needMb = envInt("SCOUT_PDF_HELPER_MB", 200);
+  let pdfSkippedForMemory = 0;
   for (const o of pdfMax > 0 ? toScore : []) {
-    if (o.source !== "enabel" || pdfs >= pdfMax || o.summary) continue;
+    if (o.source !== "enabel" || pdfs >= pdfMax || o.details) continue;
+    const mem = memoryHeadroomMb();
+    if (mem && mem.freeMb < needMb) {
+      pdfSkippedForMemory++;
+      if (pdfSkippedForMemory === 1) log(`enabel pdf: skipped, only ${mem.freeMb} MB free of ${mem.limitMb} MB`);
+      continue;
+    }
     try {
-      const text = await enrichFromPdf(o);
-      if (text) {
-        o.summary = text;
+      const doc = await readTenderPdf(o);
+      if (doc) {
+        o.details = doc.text;
         pdfs++;
+        log(`enabel pdf ${o.id}: pages ${doc.pages.join(",")} (${doc.text.length} chars)`);
       }
     } catch (e: any) {
+      pdfFails++;
       log(`enabel pdf for ${o.id} skipped: ${String(e?.message || e).slice(0, 120)}`);
     }
   }
-  if (pdfs) notes.push(`enabel: read ${pdfs} PDF${pdfs === 1 ? "" : "s"} for the shortlist`);
+  if (pdfs || pdfFails || pdfSkippedForMemory)
+    notes.push(
+      `enabel: read the tender document of ${pdfs} tender${pdfs === 1 ? "" : "s"}${pdfFails ? `, ${pdfFails} could not be read` : ""}${pdfSkippedForMemory ? `, ${pdfSkippedForMemory} skipped (not enough free memory on the instance)` : ""}`
+    );
 
   let scored: ScoredOpportunity[] = [];
   let model = "(dry run)";

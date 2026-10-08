@@ -21,15 +21,17 @@ interface SeenRecord {
   url: string;
   /** First 1,500 characters of the notice text Scout had, for the handoff to Tendi. */
   summary?: string;
+  /** First 8,000 characters of the tender document excerpt, when Scout read it (for the handoff to Tendi). */
+  details?: string;
   firstSeen: number;
   score?: Score;
   posted?: boolean;
 }
 
-type SeenInput = { id: string; source?: string; title: string; buyer: string; country?: string; deadline: string; url: string; summary?: string };
+type SeenInput = { id: string; source?: string; title: string; buyer: string; country?: string; deadline: string; url: string; summary?: string; details?: string };
 
 function toRecord(it: SeenInput, now: number): SeenRecord {
-  return { id: it.id, source: it.source, title: it.title, buyer: it.buyer, country: it.country || "", deadline: it.deadline, url: it.url, summary: (it.summary || "").slice(0, 1500), firstSeen: now };
+  return { id: it.id, source: it.source, title: it.title, buyer: it.buyer, country: it.country || "", deadline: it.deadline, url: it.url, summary: (it.summary || "").slice(0, 1500), ...(it.details ? { details: it.details.slice(0, 8000) } : {}), firstSeen: now };
 }
 
 export interface ScoutState {
@@ -110,6 +112,7 @@ export function recordScores(items: ScoredOpportunity[]): void {
   for (const it of items) {
     const rec = s.seen[it.id] || toRecord(it, Date.now());
     if (!rec.summary && it.summary) rec.summary = it.summary.slice(0, 1500);
+    if (!rec.details && it.details) rec.details = it.details.slice(0, 8000);
     rec.score = it.scored;
     s.seen[it.id] = rec;
   }

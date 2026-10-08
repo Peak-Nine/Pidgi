@@ -115,7 +115,7 @@ Checks: `npm run tendi:check` (typecheck) and `npm test` (unit tests, including 
 
 ## 7. Tendi Scout: the daily tender watcher
 
-Scout runs inside this same service. On weekday mornings it reads new tenders from four places, drops the obvious misfits with a keyword filter, asks Claude to score the rest against `tendi/scout/fit-rubric.md`, and posts a digest in your tenders channel: one header message, then one message per tender worth a look, best first, in the header's thread. Strong fits are also shown in the channel itself.
+Scout runs inside this same service. Every Monday and Thursday morning it reads new tenders from four places, drops the obvious misfits with a keyword filter, asks Claude to score the rest against `tendi/scout/fit-rubric.md`, and posts a digest in your tenders channel: one header message, then one message per tender worth a look, best first, in the header's thread. Strong fits are also shown in the channel itself.
 
 Each item shows the buyer, country, deadline, source, a fit score out of 100, two lines on why, and any red flags taken from the notice (deadline under 10 days, consortium required, language). Two things you can do on an item:
 
@@ -128,7 +128,7 @@ Each item shows the buyer, country, deadline, source, a fit score out of 100, tw
 | --- | --- | --- |
 | TED (EU tenders) | Official search API, anonymous, consultancy, research, evaluation and training CPV codes | works, verified 7 Oct 2026 |
 | UNDP procurement notices | Public RSS feed (all regions) | works, verified 7 Oct 2026 |
-| Enabel public procurement | The public "open tenders" list, first 3 pages (titles, country, closing date) | works, verified 7 Oct 2026 |
+| Enabel public procurement | The public "open tenders" list (first 3 pages), then for each shortlisted tender the pages of the tender PDF that decide a bid: cover, award criteria, terms of reference, selection file | works, verified 8 Oct 2026 |
 | ReliefWeb jobs (consultancies) | Official API, needs an approved appname | waiting: request one, see below |
 
 Every request goes through `scout/http.ts`: a User-Agent that names Peak Nine and gives a contact address, at least 1.5 seconds between requests to the same host, a small request budget per host per run, conditional requests so unchanged pages cost nothing, backoff on 429 and 5xx that respects `Retry-After`, and a guard that refuses private addresses. On a normal day that adds up to about a dozen requests across all sources. The model side is capped too: at most 60 tenders scored per run (`SCOUT_MAX_SCORE_PER_RUN`), in batches of 10, with the rubric cached. Tenders past the cap are not marked as seen, so they come back the next day while they are still inside the 3-day window.
@@ -143,7 +143,7 @@ Every request goes through `scout/http.ts`: a User-Agent that names Peak Nine an
    - **Interactivity & Shortcuts**: switch on, Request URL `https://<your-tendi-host>/slack/events` (the same URL as events). Save.
    The updated `tendi/slack-manifest.json` has all of this if you prefer to paste the manifest.
 2. Create the tenders channel in Slack (any name), invite Tendi (`/invite @Tendi`), and copy the channel ID (channel name → About → bottom of the panel, starts with C).
-3. On Render, Tendi service → Environment: set `SCOUT_CHANNEL` to that ID. Optional: `SCOUT_TIME` (default `07:30`, Brussels time), `SCOUT_DAYS` (default `1,2,3,4,5`, Monday to Friday), `SCOUT_MODEL` (default `claude-sonnet-4-6`). Save; Render redeploys.
+3. On Render, Tendi service → Environment: set `SCOUT_CHANNEL` to that ID. Optional: `SCOUT_TIME` (default `07:30`, Brussels time), `SCOUT_DAYS` (default `1,4`, Monday and Thursday; each run looks back far enough to cover the gap), `SCOUT_MODEL` (default `claude-sonnet-4-6`). Save; Render redeploys.
 4. Try it without waiting for the morning: `https://<your-tendi-host>/scout/run?key=<TENDI_ADMIN_KEY>&dry=1` fetches and filters only (no model, nothing stored, nothing posted). Then `/scout/run?key=...` for a real run with a digest. `/scout/status?key=...` shows the config, the last runs, the feedback counts and the best items of the last 7 days.
 
 Scout keeps its memory (which tenders it has seen, the reactions, the run history) in `tendi-scout/state.json` on the same persistent disk as the threads. That is also why it runs inside the web service and not as a separate Render Cron Job: a Render disk attaches to one service only. If you ever want an outside scheduler, any cron that calls `/scout/run?key=...` works.
@@ -165,7 +165,7 @@ A laptop run stores its memory in your temp folder unless `TENDI_DATA_DIR` says 
 - The keyword lists: `POSITIVE` and `NEGATIVE` in `tendi/scout/filter.ts`. The filter is meant to be generous; its only job is to keep furniture, works and vehicles away from the model.
 - "National consultant" roles (open only to nationals of the country, mostly UNDP) are dropped by default. Set `SCOUT_KEEP_NATIONAL=1` to keep them.
 - TED CPV codes: `SCOUT_TED_CPV` (space separated). UNDP regions: `SCOUT_UNDP_FEEDS` (for example `RAF,RER`).
-- Reading Enabel tender PDFs (`SCOUT_ENABEL_PDF_MAX`) is off. On 8 Oct 2026 six PDFs pushed Tendi past Render's 512 MB memory limit and both scheduled runs crashed before posting. Only switch it on with a larger instance.
+- Enabel tender PDFs are read by a separate helper process (`tendi/scout/pdf-pages.mjs`), one at a time, about 150 MB each, killed after 60 seconds. It reads the table of contents and then only the decisive pages (on the tenders tested, the first six pages were cover, contents and legal boilerplate; turnover and team requirements sat on pages 31 to 35). Before each PDF Scout checks the instance's free memory and skips the PDF when less than 200 MB is free; `/scout/status` shows the memory it sees. Background: on 8 Oct 2026 reading PDFs inside Tendi itself pushed it past Render's 512 MB and both scheduled runs crashed.
 - If a scheduled run crashes the service, Scout retries once that day (two attempts in total), never starts after `SCOUT_LATEST` (default 20:00), and counts the day as done only when a run finished.
 
 ### Costs, roughly

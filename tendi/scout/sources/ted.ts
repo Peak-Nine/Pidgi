@@ -12,6 +12,7 @@
  * development services and training. The keyword prefilter does the rest.
  */
 import { politeFetch } from "../http.js";
+import { envInt } from "../env.js";
 import { decodeEntities } from "../rss.js";
 import type { FetchContext, Opportunity, SourceAdapter, SourceResult } from "../types.js";
 
@@ -121,7 +122,9 @@ export const tedAdapter: SourceAdapter = {
     const notes: string[] = [];
     const items: Opportunity[] = [];
     const cpv = (process.env.SCOUT_TED_CPV || "").split(/\s+/).filter(Boolean);
-    const maxPages = Number(process.env.SCOUT_TED_MAX_PAGES) || 2;
+    // About 45 notices a day pass our CPV query: one page of 100 per two days, at least 2.
+    const days = Math.max(1, Math.round((Date.now() - Date.parse(ctx.since + "T00:00:00Z")) / 86400000));
+    const maxPages = envInt("SCOUT_TED_MAX_PAGES", Math.max(2, Math.ceil(days * 0.6)));
     const limit = 100;
     try {
       for (let page = 1; page <= maxPages; page++) {
@@ -131,7 +134,7 @@ export const tedAdapter: SourceAdapter = {
           body: JSON.stringify(body),
           headers: { "content-type": "application/json" },
           accept: "application/json",
-          budget: 6,
+          budget: maxPages + 3,
           conditional: false,
         });
         if (!r.ok) {

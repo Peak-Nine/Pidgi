@@ -21,6 +21,18 @@ import type { Feedback, Opportunity, Score, ScoredOpportunity } from "./types.js
 export const SCOUT_MODEL = process.env.SCOUT_MODEL || "claude-sonnet-4-6";
 const FALLBACK_MODEL = process.env.TENDI_MODEL || "claude-opus-4-8";
 const BATCH = Math.max(1, Math.min(20, Number(process.env.SCOUT_BATCH) || 10));
+// Items with a tender document excerpt are long (about 8,000 tokens each): score them two at a time.
+const BATCH_DETAILED = Math.max(1, Math.min(5, Number(process.env.SCOUT_BATCH_DETAILED) || 2));
+
+/** Split items into scoring batches: short items in tens, items with a document excerpt in twos. */
+export function makeBatches<T extends { details?: string }>(items: T[], short = BATCH, detailed = BATCH_DETAILED): T[][] {
+  const out: T[][] = [];
+  const plain = items.filter((o) => !o.details);
+  const rich = items.filter((o) => o.details);
+  for (let i = 0; i < rich.length; i += detailed) out.push(rich.slice(i, i + detailed));
+  for (let i = 0; i < plain.length; i += short) out.push(plain.slice(i, i + short));
+  return out;
+}
 
 export function loadRubric(file = path.join(__dirname, "fit-rubric.md")): string {
   try {
@@ -75,7 +87,8 @@ export function describeForScoring(o: Opportunity, today = new Date()): string {
     o.published ? `published: ${o.published}` : "",
     o.cpv?.length ? `cpv: ${o.cpv.slice(0, 6).join(", ")}` : "",
     o.meta ? Object.entries(o.meta).filter(([, v]) => v).map(([k, v]) => `${k}: ${clip(String(v), 200)}`).join("\n") : "",
-    `text: ${o.summary ? clip(o.summary.replace(/\s+/g, " "), 2500) : "(title only, no text available)"}`,
+    `text: ${o.summary ? clip(o.summary.replace(/\s+/g, " "), 2500) : o.details ? "(see the tender document excerpt below)" : "(title only, no text available)"}`,
+    o.details ? `tender document excerpt (cover, award criteria, terms of reference, selection criteria; page numbers in brackets):\n${clip(o.details, 30_000)}` : "",
   ].filter(Boolean);
   return lines.join("\n");
 }
@@ -124,7 +137,7 @@ export function normalizeScores(items: Opportunity[], raw: any, today = new Date
     const n = Math.max(0, Math.min(100, Math.round(Number(s.score) || 0)));
     for (const f of Array.isArray(s.flags) ? s.flags : []) if (typeof f === "string" && f.trim()) flags.add(clip(f.trim(), 120));
     const pb = ["proof-of-change", "new-proposal", "rfp-philea", "none"].includes(s.playbook) ? s.playbook : "none";
-    return { id: o.id, score: n, verdict: verdictFor(n), why: clip(String(s.why || "").trim(), 400) || "(no reason given)", flags: [...flags].slice(0, 6), playbook: pb };
+    return { id: o.id, score: n, verdict: verdictFor(n), why: clip(String(s.why || "").trim(), 400) || "(no reason given)", flags: [...flags].slice(0, o.details ? 9 : 6), playbook: pb };
   });
 }
 
@@ -163,8 +176,9 @@ export async function scoreOpportunities(anthropic: Anthropic, items: Opportunit
   const errors: string[] = [];
   let model = SCOUT_MODEL;
 
-  for (let i = 0; i < items.length; i += BATCH) {
-    const batch = items.slice(i, i + BATCH);
+  const batches = makeBatches(items);
+  for (let b = 0; b < batches.length; b++) {
+    const batch = batches[b];
     const userText = [`Score these ${batch.length} opportunities. Return one entry per id.`, "", ...batch.map((o, k) => `## Item ${k + 1}\n${describeForScoring(o, today)}`)].join("\n");
     let raw: any = null;
     try {
@@ -179,15 +193,15 @@ export async function scoreOpportunities(anthropic: Anthropic, items: Opportunit
         try {
           ({ raw } = await callOnce(anthropic, model, system, userText));
         } catch (e2: any) {
-          errors.push(`batch ${i / BATCH + 1}: ${String(e2?.message || e2).slice(0, 200)}`);
+          errors.push(`batch ${b + 1}: ${String(e2?.message || e2).slice(0, 200)}`);
         }
       } else {
-        errors.push(`batch ${i / BATCH + 1}: ${msg.slice(0, 200)}`);
+        errors.push(`batch ${b + 1}: ${msg.slice(0, 200)}`);
       }
     }
     const scores = normalizeScores(batch, raw, today);
     for (let k = 0; k < batch.length; k++) scored.push({ ...batch[k], scored: scores[k] });
-    log(`scorer: batch ${i / BATCH + 1} -> ${scores.filter((s) => s.score > 0).length}/${batch.length} scored`);
+    log(`scorer: batch ${b + 1}/${batches.length} -> ${scores.filter((s) => s.score > 0).length}/${batch.length} scored`);
   }
   return { scored, errors, model };
 }

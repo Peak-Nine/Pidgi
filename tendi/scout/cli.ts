@@ -16,6 +16,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { WebClient } from "@slack/web-api";
 import { postDigest, renderPlain } from "./digest.js";
 import { runScout } from "./run.js";
+import { lookbackFor, scoutConfig } from "./service.js";
 
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
 
@@ -37,7 +38,8 @@ async function main() {
   if (post && (!process.env.SLACK_BOT_TOKEN || !process.env.SCOUT_CHANNEL)) throw new Error("--post needs SLACK_BOT_TOKEN and SCOUT_CHANNEL.");
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "not-needed-for-dry-run" });
-  const run = await runScout({ anthropic, trigger: "cli", dryRun: !score, sources, since, log: (l) => console.error(`[scout] ${l}`) });
+  const lookbackDays = lookbackFor(scoutConfig().days);
+  const run = await runScout({ anthropic, trigger: "cli", dryRun: !score, sources, since, lookbackDays, log: (l) => console.error(`[scout] ${l}`) });
   console.log(renderPlain(run));
   console.log("");
   console.log(`Notes:\n${run.summary.notes.map((n) => `  ${n}`).join("\n")}`);

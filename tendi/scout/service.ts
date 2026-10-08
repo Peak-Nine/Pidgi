@@ -14,6 +14,7 @@
  */
 import type Anthropic from "@anthropic-ai/sdk";
 import { postDigest, START_ACTION_ID, TZ } from "./digest.js";
+import { memoryHeadroomMb } from "./memory.js";
 import { runScout, type RunResult } from "./run.js";
 import { SCOUT_MODEL } from "./scorer.js";
 import {
@@ -54,11 +55,11 @@ export function scoutConfig(env = process.env): ScoutConfig {
   const channel = (env.SCOUT_CHANNEL || "").trim();
   const time = hhmm(env.SCOUT_TIME, "07:30");
   const latest = hhmm(env.SCOUT_LATEST, "20:00");
-  const days = (env.SCOUT_DAYS || "1,2,3,4,5")
+  const days = (env.SCOUT_DAYS || "1,4")
     .split(",")
     .map((d) => Number(d.trim()))
     .filter((d) => d >= 1 && d <= 7);
-  return { channel, enabled: !!channel && env.SCOUT_ENABLED !== "0", time, latest, days: days.length ? days : [1, 2, 3, 4, 5], tz: TZ, model: SCOUT_MODEL };
+  return { channel, enabled: !!channel && env.SCOUT_ENABLED !== "0", time, latest, days: days.length ? days : [1, 4], tz: TZ, model: SCOUT_MODEL };
 }
 
 const WEEKDAY: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
@@ -84,6 +85,22 @@ export function isDue(cfg: ScoutConfig, now: Date, today: { completed: boolean; 
   const c = localClock(now, cfg.tz);
   if (!cfg.days.includes(c.weekday)) return false;
   return c.hhmm >= cfg.time && c.hhmm < cfg.latest;
+}
+
+/**
+ * How many days each run should look back so nothing falls between two runs:
+ * the longest gap between scheduled weekdays, plus one day of overlap
+ * (Monday and Thursday: Thursday to Monday is 4 days, so 5).
+ */
+export function lookbackFor(days: number[]): number {
+  const d = [...new Set(days)].filter((x) => x >= 1 && x <= 7).sort((a, b) => a - b);
+  if (!d.length) return 3;
+  let gap = 0;
+  for (let i = 0; i < d.length; i++) {
+    const next = i + 1 < d.length ? d[i + 1] : d[0] + 7;
+    gap = Math.max(gap, next - d[i]);
+  }
+  return gap + 1;
 }
 
 /** Did a run finish on this local day? Scheduled runs count; manual runs count when they posted something. */
@@ -118,7 +135,7 @@ export function startScoutService(deps: ScoutServiceDeps) {
     if (running) return null;
     running = true;
     try {
-      const run = await runScout({ anthropic: deps.anthropic, trigger, dryRun: opts.dryRun, sources: opts.sources, since: opts.since, log });
+      const run = await runScout({ anthropic: deps.anthropic, trigger, dryRun: opts.dryRun, sources: opts.sources, since: opts.since, lookbackDays: lookbackFor(cfg.days), log });
       let headerTs: string | undefined;
       let posted = 0;
       if (opts.post !== false && !opts.dryRun && cfg.channel) {
@@ -183,6 +200,8 @@ export function startScoutService(deps: ScoutServiceDeps) {
       running,
       lastScheduledDay: getLastScheduledDay() || null,
       attemptsToday: getAttempts(localClock(new Date(), cfg.tz).day),
+      memory: memoryHeadroomMb() || "cgroup limit not readable",
+      lookbackDays: lookbackFor(cfg.days),
       lastResult,
       lastError: lastError || null,
       feedback: feedbackCounts(),

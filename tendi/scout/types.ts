@@ -18,6 +18,8 @@ export interface Opportunity {
   url: string;
   /** Description or extracted text, trimmed to a few thousand characters. */
   summary: string;
+  /** Excerpt of the tender document itself (cover, award criteria, terms of reference, selection criteria), when Scout could read it. */
+  details?: string;
   cpv?: string[];
   attachments?: string[];
   /** Extra source facts worth showing (notice type, procedure, estimated value). */

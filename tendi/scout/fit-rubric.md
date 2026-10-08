@@ -49,6 +49,15 @@ Peak Nine is a systemic innovation and impact studio in Antwerp (Niels Van Espen
 - `playbook`: which Tendi playbook would apply if we bid: proof-of-change (beyond-the-grant and sustainability briefs), rfp-philea (formal RFPs with evaluation criteria and portal slots), new-proposal (programmes and innovation sprints), or none.
 - When the notice text is thin (title only), say so in `why` and score conservatively; the humans can open the attachment.
 
+## When the tender document itself is attached
+
+For Enabel tenders Scout reads the cover, the award criteria, the terms of reference and the selection file of the tender PDF and passes them as an excerpt. Then:
+
+- Judge fit on the terms of reference (what they actually ask for), not on the title.
+- Put these facts in `flags`, quoted short and with numbers exactly as written: the minimum turnover or other financial requirement, the key expert requirements (years, regions, number of references), the working languages, the quality/price split, the duration or number of person-days when given, and the submission deadline on the cover. Never round or convert.
+- When the deadline on the cover differs from the one the listing gave, flag both dates.
+- Do not decide whether Peak Nine meets a requirement; state it so the team can check.
+
 ## Calibration
 
 Thumbs up and thumbs down reactions on past digest items are fed back as examples. Treat a 👍 as "this is the kind of tender we want to see" and a 👎 as "stop showing this kind", and move similar items accordingly.

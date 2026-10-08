@@ -25,7 +25,8 @@ export function scoutItemBlock(r: SeenRecord): string {
     parts.push(line("scout_why", s.why));
     if (s.flags?.length) parts.push(`scout_flags: ${s.flags.join("; ")}`);
   }
-  parts.push(r.summary ? `notice_text (first part of what Scout read; read the link for the full terms):\n${r.summary}` : "notice_text: (Scout had only the title; read the link for the terms of reference)");
+  if (r.details) parts.push(`tender_document_excerpt (cover, award criteria, terms of reference, selection criteria as Scout read them; first 8,000 characters):\n${r.details}`);
+  else parts.push(r.summary ? `notice_text (first part of what Scout read; read the link for the full terms):\n${r.summary}` : "notice_text: (Scout had only the title; read the link for the terms of reference)");
   parts.push("</scout_item>");
   return parts.join("\n");
 }
