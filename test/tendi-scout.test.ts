@@ -255,17 +255,40 @@ describe("scout/run + store + digest", () => {
   });
 });
 
+describe("scout/env", () => {
+  it("honours an explicit 0", async () => {
+    const { envInt } = await import("../tendi/scout/env.js");
+    expect(envInt("X", 6, { X: "0" } as any)).toBe(0);
+    expect(envInt("X", 6, {} as any)).toBe(6);
+    expect(envInt("X", 6, { X: "abc" } as any)).toBe(6);
+  });
+});
+
 describe("scout/service", () => {
   it("schedules once per local day on the chosen weekdays", async () => {
-    const { isDue, localClock, scoutConfig, verdictFromReaction } = await import("../tendi/scout/service.js");
-    const cfg = scoutConfig({ SCOUT_CHANNEL: "C1", SCOUT_TIME: "07:30", SCOUT_DAYS: "1,2,3,4,5" } as any);
+    const { isDue, localClock, scoutConfig, verdictFromReaction, completedOn, MAX_ATTEMPTS_PER_DAY } = await import("../tendi/scout/service.js");
+    const cfg = scoutConfig({ SCOUT_CHANNEL: "C1", SCOUT_TIME: "7:30", SCOUT_DAYS: "1,2,3,4,5" } as any);
+    expect(cfg.time).toBe("07:30");
+    expect(cfg.latest).toBe("20:00");
+    const fresh = { completed: false, attempts: 0 };
     // 2026-10-07 is a Wednesday; 05:20 UTC = 07:20 in Brussels (CEST)
     expect(localClock(new Date("2026-10-07T05:20:00Z"), "Europe/Brussels")).toEqual({ day: "2026-10-07", weekday: 3, hhmm: "07:20" });
-    expect(isDue(cfg, new Date("2026-10-07T05:20:00Z"), undefined)).toBe(false);
-    expect(isDue(cfg, new Date("2026-10-07T05:31:00Z"), undefined)).toBe(true);
-    expect(isDue(cfg, new Date("2026-10-07T05:31:00Z"), "2026-10-07")).toBe(false);
+    expect(isDue(cfg, new Date("2026-10-07T05:20:00Z"), fresh)).toBe(false);
+    expect(isDue(cfg, new Date("2026-10-07T05:31:00Z"), fresh)).toBe(true);
+    // a finished run today, or too many crashed attempts, means no more runs today
+    expect(isDue(cfg, new Date("2026-10-07T05:31:00Z"), { completed: true, attempts: 1 })).toBe(false);
+    expect(isDue(cfg, new Date("2026-10-07T05:31:00Z"), { completed: false, attempts: 1 })).toBe(true);
+    expect(isDue(cfg, new Date("2026-10-07T05:31:00Z"), { completed: false, attempts: MAX_ATTEMPTS_PER_DAY })).toBe(false);
+    // a deploy at 23:58 does not post a digest at midnight
+    expect(isDue(cfg, new Date("2026-10-07T21:58:00Z"), fresh)).toBe(false);
     // Saturday 10 Oct 2026
-    expect(isDue(cfg, new Date("2026-10-10T09:00:00Z"), undefined)).toBe(false);
+    expect(isDue(cfg, new Date("2026-10-10T09:00:00Z"), fresh)).toBe(false);
+    // what counts as "done today"
+    const at = new Date("2026-10-08T05:35:00Z").getTime();
+    expect(completedOn("2026-10-08", [{ finishedAt: at, trigger: "schedule", posted: 0 }], "Europe/Brussels")).toBe(true);
+    expect(completedOn("2026-10-08", [{ finishedAt: at, trigger: "manual", posted: 0 }], "Europe/Brussels")).toBe(false);
+    expect(completedOn("2026-10-08", [{ finishedAt: at, trigger: "manual", posted: 5 }], "Europe/Brussels")).toBe(true);
+    expect(completedOn("2026-10-09", [{ finishedAt: at, trigger: "schedule", posted: 3 }], "Europe/Brussels")).toBe(false);
     expect(scoutConfig({} as any).enabled).toBe(false);
     expect(verdictFromReaction("+1::skin-tone-3")).toBe("up");
     expect(verdictFromReaction("thumbsdown")).toBe("down");

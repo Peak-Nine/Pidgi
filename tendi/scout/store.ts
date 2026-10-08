@@ -38,8 +38,10 @@ export interface ScoutState {
   digests: Record<string, string[]>; // "channel:ts" of a digest header -> item ids posted in its thread
   feedback: Feedback[];
   runs: RunSummary[];
-  /** YYYY-MM-DD (Europe/Brussels) of the last scheduled run, so a restart never runs twice a day. */
+  /** YYYY-MM-DD (local) of the last scheduled run that finished. Shown on /scout/status. */
   lastScheduledDay?: string;
+  /** Scheduled attempts today, so a run that crashes the process is retried at most a couple of times. */
+  attempts?: { day: string; count: number };
 }
 
 export type { SeenRecord };
@@ -61,7 +63,7 @@ export function loadState(): ScoutState {
   try {
     if (existsSync(file())) {
       const j = JSON.parse(readFileSync(file(), "utf8"));
-      cached = { seen: j.seen || {}, messages: j.messages || {}, digests: j.digests || {}, feedback: j.feedback || [], runs: j.runs || [], lastScheduledDay: j.lastScheduledDay };
+      cached = { seen: j.seen || {}, messages: j.messages || {}, digests: j.digests || {}, feedback: j.feedback || [], runs: j.runs || [], lastScheduledDay: j.lastScheduledDay, attempts: j.attempts };
       return cached;
     }
   } catch {
@@ -153,6 +155,15 @@ export function removeFeedback(itemId: string, by: string, verdict?: "up" | "dow
 export function feedbackCounts(): { up: number; down: number } {
   const s = loadState();
   return { up: s.feedback.filter((f) => f.verdict === "up").length, down: s.feedback.filter((f) => f.verdict === "down").length };
+}
+
+export function getAttempts(day: string): number {
+  const a = loadState().attempts;
+  return a && a.day === day ? a.count : 0;
+}
+
+export function setAttempts(day: string, count: number): void {
+  loadState().attempts = { day, count };
 }
 
 export function getLastScheduledDay(): string | undefined {

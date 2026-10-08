@@ -19,12 +19,14 @@ import { SCOUT_MODEL } from "./scorer.js";
 import {
   addFeedback,
   feedbackCounts,
+  getAttempts,
   getLastScheduledDay,
   itemById,
   itemForMessage,
   lastRuns,
   removeFeedback,
   saveState,
+  setAttempts,
   setLastScheduledDay,
   topRecent,
   type SeenRecord,
@@ -33,20 +35,30 @@ import {
 export interface ScoutConfig {
   channel: string;
   enabled: boolean;
-  time: string; // HH:MM in TZ
+  time: string; // HH:MM in TZ, earliest start
+  latest: string; // HH:MM in TZ, no scheduled start after this (catch-up after a late deploy waits for tomorrow)
   days: number[]; // 1 = Monday ... 7 = Sunday
   tz: string;
   model: string;
 }
 
+/** Scheduled attempts per day. A run that crashes the process (out of memory, say) is retried once. */
+export const MAX_ATTEMPTS_PER_DAY = 2;
+
+function hhmm(s: string | undefined, def: string): string {
+  const m = String(s || "").match(/^(\d{1,2}):(\d{2})$/);
+  return m ? `${m[1].padStart(2, "0")}:${m[2]}` : def;
+}
+
 export function scoutConfig(env = process.env): ScoutConfig {
   const channel = (env.SCOUT_CHANNEL || "").trim();
-  const time = /^\d{1,2}:\d{2}$/.test(env.SCOUT_TIME || "") ? (env.SCOUT_TIME as string) : "07:30";
+  const time = hhmm(env.SCOUT_TIME, "07:30");
+  const latest = hhmm(env.SCOUT_LATEST, "20:00");
   const days = (env.SCOUT_DAYS || "1,2,3,4,5")
     .split(",")
     .map((d) => Number(d.trim()))
     .filter((d) => d >= 1 && d <= 7);
-  return { channel, enabled: !!channel && env.SCOUT_ENABLED !== "0", time, days: days.length ? days : [1, 2, 3, 4, 5], tz: TZ, model: SCOUT_MODEL };
+  return { channel, enabled: !!channel && env.SCOUT_ENABLED !== "0", time, latest, days: days.length ? days : [1, 2, 3, 4, 5], tz: TZ, model: SCOUT_MODEL };
 }
 
 const WEEKDAY: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
@@ -62,14 +74,21 @@ export function localClock(now: Date, tz: string): { day: string; weekday: numbe
   return { day: `${parts.year}-${parts.month}-${parts.day}`, weekday: WEEKDAY[parts.weekday] || 0, hhmm: `${hour}:${parts.minute}` };
 }
 
-/** True when a scheduled run is due now. */
-export function isDue(cfg: ScoutConfig, now: Date, lastDay: string | undefined): boolean {
-  if (!cfg.enabled) return false;
+/**
+ * True when a scheduled run is due now: a chosen weekday, between `time` and
+ * `latest`, no run has finished today, and fewer than MAX_ATTEMPTS_PER_DAY
+ * attempts were started today (an attempt that crashed the process never finishes).
+ */
+export function isDue(cfg: ScoutConfig, now: Date, today: { completed: boolean; attempts: number }): boolean {
+  if (!cfg.enabled || today.completed || today.attempts >= MAX_ATTEMPTS_PER_DAY) return false;
   const c = localClock(now, cfg.tz);
   if (!cfg.days.includes(c.weekday)) return false;
-  const [h, m] = cfg.time.split(":").map(Number);
-  const due = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-  return c.hhmm >= due && lastDay !== c.day;
+  return c.hhmm >= cfg.time && c.hhmm < cfg.latest;
+}
+
+/** Did a run finish on this local day? Scheduled runs count; manual runs count when they posted something. */
+export function completedOn(day: string, runs: { finishedAt: number; trigger: string; posted: number }[], tz: string): boolean {
+  return runs.some((r) => localClock(new Date(r.finishedAt), tz).day === day && (r.trigger === "schedule" || r.posted > 0));
 }
 
 export function verdictFromReaction(name: string): "up" | "down" | null {
@@ -120,14 +139,30 @@ export function startScoutService(deps: ScoutServiceDeps) {
   }
 
   // ── schedule ───────────────────────────────────────────────────────────────
+  let warnedDay = "";
   function tick() {
     try {
+      if (running) return;
       const now = new Date();
-      if (running || !isDue(cfg, now, getLastScheduledDay())) return;
-      // Claim the day before running, so a crash mid-run never loops.
-      setLastScheduledDay(localClock(now, cfg.tz).day);
+      const day = localClock(now, cfg.tz).day;
+      const today = { completed: completedOn(day, lastRuns(60), cfg.tz), attempts: getAttempts(day) };
+      if (!isDue(cfg, now, today)) {
+        if (!today.completed && today.attempts >= MAX_ATTEMPTS_PER_DAY && warnedDay !== day) {
+          warnedDay = day;
+          log(`no digest today: ${today.attempts} attempts did not finish (see the instance events for crashes); next try tomorrow, or GET /scout/run`);
+        }
+        return;
+      }
+      // Count the attempt before running: if the run takes the process down, the restart sees it.
+      setAttempts(day, today.attempts + 1);
       saveState();
-      void runAndPost("schedule");
+      log(`scheduled run, attempt ${today.attempts + 1} of ${MAX_ATTEMPTS_PER_DAY} today`);
+      void runAndPost("schedule").then((run) => {
+        if (run) {
+          setLastScheduledDay(day);
+          saveState();
+        }
+      });
     } catch (e: any) {
       log(`schedule check failed: ${e?.message || e}`);
     }
@@ -135,7 +170,7 @@ export function startScoutService(deps: ScoutServiceDeps) {
   if (cfg.enabled) {
     setTimeout(tick, 60_000);
     setInterval(tick, 5 * 60_000).unref?.();
-    log(`daily run at ${cfg.time} ${cfg.tz} on days ${cfg.days.join(",")} into channel ${cfg.channel}; scorer ${cfg.model}`);
+    log(`daily run from ${cfg.time} (no start after ${cfg.latest}) ${cfg.tz} on days ${cfg.days.join(",")} into channel ${cfg.channel}; scorer ${cfg.model}`);
   } else {
     log(cfg.channel ? "schedule paused (SCOUT_ENABLED=0)" : "schedule off: set SCOUT_CHANNEL to the tenders channel id to switch it on");
   }
@@ -147,6 +182,7 @@ export function startScoutService(deps: ScoutServiceDeps) {
       config: { ...cfg, channel: cfg.channel || "(not set)", reliefweb: process.env.RELIEFWEB_APPNAME ? "appname set" : "waiting for appname" },
       running,
       lastScheduledDay: getLastScheduledDay() || null,
+      attemptsToday: getAttempts(localClock(new Date(), cfg.tz).day),
       lastResult,
       lastError: lastError || null,
       feedback: feedbackCounts(),

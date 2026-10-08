@@ -128,7 +128,7 @@ Each item shows the buyer, country, deadline, source, a fit score out of 100, tw
 | --- | --- | --- |
 | TED (EU tenders) | Official search API, anonymous, consultancy, research, evaluation and training CPV codes | works, verified 7 Oct 2026 |
 | UNDP procurement notices | Public RSS feed (all regions) | works, verified 7 Oct 2026 |
-| Enabel public procurement | The public "open tenders" list, first 3 pages, plus the first pages of up to 6 tender PDFs per run | works, verified 7 Oct 2026 |
+| Enabel public procurement | The public "open tenders" list, first 3 pages (titles, country, closing date) | works, verified 7 Oct 2026 |
 | ReliefWeb jobs (consultancies) | Official API, needs an approved appname | waiting: request one, see below |
 
 Every request goes through `scout/http.ts`: a User-Agent that names Peak Nine and gives a contact address, at least 1.5 seconds between requests to the same host, a small request budget per host per run, conditional requests so unchanged pages cost nothing, backoff on 429 and 5xx that respects `Retry-After`, and a guard that refuses private addresses. On a normal day that adds up to about a dozen requests across all sources. The model side is capped too: at most 60 tenders scored per run (`SCOUT_MAX_SCORE_PER_RUN`), in batches of 10, with the rubric cached. Tenders past the cap are not marked as seen, so they come back the next day while they are still inside the 3-day window.
@@ -165,6 +165,8 @@ A laptop run stores its memory in your temp folder unless `TENDI_DATA_DIR` says 
 - The keyword lists: `POSITIVE` and `NEGATIVE` in `tendi/scout/filter.ts`. The filter is meant to be generous; its only job is to keep furniture, works and vehicles away from the model.
 - "National consultant" roles (open only to nationals of the country, mostly UNDP) are dropped by default. Set `SCOUT_KEEP_NATIONAL=1` to keep them.
 - TED CPV codes: `SCOUT_TED_CPV` (space separated). UNDP regions: `SCOUT_UNDP_FEEDS` (for example `RAF,RER`).
+- Reading Enabel tender PDFs (`SCOUT_ENABEL_PDF_MAX`) is off. On 8 Oct 2026 six PDFs pushed Tendi past Render's 512 MB memory limit and both scheduled runs crashed before posting. Only switch it on with a larger instance.
+- If a scheduled run crashes the service, Scout retries once that day (two attempts in total), never starts after `SCOUT_LATEST` (default 20:00), and counts the day as done only when a run finished.
 
 ### Costs, roughly
 

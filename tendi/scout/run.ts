@@ -6,9 +6,16 @@
  *
  * Posting to Slack lives in digest.ts so the CLI can dry-run without a token.
  * Budgets per run (env, defaults in brackets): SCOUT_LOOKBACK_DAYS [3],
- * SCOUT_MAX_SCORE_PER_RUN [60], SCOUT_ENABEL_PDF_MAX [6].
+ * SCOUT_MAX_SCORE_PER_RUN [60], SCOUT_ENABEL_PDF_MAX [0].
+ *
+ * Why PDF reading is off by default: measured on 8 Oct 2026, reading six Enabel
+ * tender PDFs pushed the process from about 180 MB to about 650 MB, and Tendi's
+ * Render instance has 512 MB in total. Two scheduled runs died with "out of
+ * memory" before posting. The first pages of those PDFs are mostly boilerplate
+ * anyway; the scorer works from the title and says when that is all it had.
  */
 import type Anthropic from "@anthropic-ai/sdk";
+import { envInt } from "./env.js";
 import { prefilter } from "./filter.js";
 import { resetBudgets } from "./http.js";
 import { scoreOpportunities } from "./scorer.js";
@@ -71,10 +78,10 @@ export function scoringOrder(a: { o: Opportunity; p: number }, b: { o: Opportuni
 export async function runScout(opts: RunOptions): Promise<RunResult> {
   const now = opts.now || new Date();
   const log = opts.log || ((l: string) => console.log(`[scout] ${l}`));
-  const lookback = Number(process.env.SCOUT_LOOKBACK_DAYS) || 3;
+  const lookback = envInt("SCOUT_LOOKBACK_DAYS", 3) || 3;
   const since = opts.since || isoDaysAgo(lookback, now);
-  const maxScore = Number(process.env.SCOUT_MAX_SCORE_PER_RUN) || 60;
-  const pdfMax = Number(process.env.SCOUT_ENABEL_PDF_MAX) || 6;
+  const maxScore = envInt("SCOUT_MAX_SCORE_PER_RUN", 60) || 60;
+  const pdfMax = Math.max(0, envInt("SCOUT_ENABEL_PDF_MAX", 0));
   const startedAt = Date.now();
   const notes: string[] = [];
   const errors: string[] = [];
@@ -122,9 +129,9 @@ export async function runScout(opts: RunOptions): Promise<RunResult> {
   const overflow = kept.slice(maxScore);
   if (overflow.length) notes.push(`${overflow.length} items left for the next run (SCOUT_MAX_SCORE_PER_RUN=${maxScore})`);
 
-  // A few Enabel PDFs so the scorer sees more than a title. Capped; failures are silent.
+  // Optional: a few Enabel PDFs so the scorer sees more than a title. Off by default (memory, see top).
   let pdfs = 0;
-  for (const o of toScore) {
+  for (const o of pdfMax > 0 ? toScore : []) {
     if (o.source !== "enabel" || pdfs >= pdfMax || o.summary) continue;
     try {
       const text = await enrichFromPdf(o);
