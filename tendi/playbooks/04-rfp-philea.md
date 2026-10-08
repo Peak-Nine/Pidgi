@@ -4,7 +4,7 @@ Take a new RFP or tender, write a Peak Nine proposal in the structure, tone and 
 
 Source designs in Canva (always copy, never touch):
 - Philea proposal doc, fixed pages, API-editable: Canva ID `DAHWFiZkv6w`
-- Philea V1 methodology poster, whiteboard, text NOT API-editable (copy and PDF export do work): Canva ID `DAHWICf3ANs`
+- Philea V1 methodology poster, whiteboard: Canva ID `DAHWICf3ANs`. Its text is changed with whole-poster find-and-replace (see step 6), not element by element
 
 Standing rules for every line (on top of 00-voice.md):
 - Every claim traces back to the RFP, to something Niels decided, or to a reference case Peak Nine has actually done (05-credentials.md). No invented numbers, clients, results or quotes. Unknowns become `[TO CONFIRM: ...]` or `[TO COMPLETE: ...]` and go on the open-items list.
@@ -69,19 +69,21 @@ After Niels has marked up draft 1 and Canva is connected: copy `DAHWFiZkv6w`, re
 
 ## Step 6. The poster
 
-The poster is a whiteboard: its text cannot be edited through the API, and Tendi cannot drive a browser. What Tendi does:
+The poster is a Canva whiteboard. Canva reports its page as not editable, but its edit tool does accept find-and-replace on the whole whiteboard page when you pass `is_editable: true` (tested on 8 Oct 2026: every occurrence of a find string on the poster is replaced, across all cards). That behaviour is not documented by Canva, so check the result every time and fall back to the manual list when it stops working.
 
-1. Copy `DAHWICf3ANs` (the copy works through the API) and save the copy's id and edit URL in the workspace links.
-2. Give Niels the ordered replacement map below, to run through Canva's Find and replace (Match case on) in the copy.
-3. When Niels says the poster is done, export the copy with `deliver_canva_pdf` ("Peak Nine for <client> - Methodology Poster.pdf") so the PDF lands in the thread. The poster PDF is large (about 20 MB for one page).
+1. Copy `DAHWICf3ANs` and save the copy's design id and edit URL in the workspace links. Never touch the master.
+2. Build the ordered replacement list from the approved draft and post it in the thread (old text, new text, in order). Wait for Niels's yes.
+3. On yes: read the copy with an editing transaction to get the whiteboard page's locator id (the page id). Apply the list with `find_and_replace_text` operations on that page locator, with `page_index: 1` and `is_editable: true`, in batches of about 20 operations per call, keeping the transaction open. Then commit. Tendi refuses to open an editing transaction on a master template, so a transaction on the master is never possible.
+4. Re-read the copy's saved text (no transaction) and check every line of the list: the old text must be gone and the new text present. Search for template residue too: "Philea", "General Assembly", old dates, old names. Anything that did not change goes back to Niels as a short manual list.
+5. Return the copy's edit link. That is the deliverable for the poster; export a PDF only when Niels asks.
 
-The replacement map, in this order:
+Order matters, because each find-and-replace changes every occurrence on the whole poster:
 - reference-case text first, because it contains short words (Benchmark, Roadmap, Draft) used later as chips
 - long strings before any short substring they contain ("Workstream A to B" before "Workstream A")
 - deliverable lines that contain dates before the month labels of the timeline
 - chips and single words last
 - never write a replacement that a later find string would match (write dates in full month names if a short month label is replaced later)
-- text boxes with manual line breaks do not match a full-line find; replace in two or three chunks that stop at the break
+- text boxes with manual line breaks do not match a full-line find; replace in two or three chunks that stop at the break, and confirm in step 4
 - avoid find strings that depend on the euro sign
 
 Tell Niels what stays manual in Canva: the client logo in the header, moving milestone markers and phase bands to the new timeline slots, adding or removing team cards, overflow in cards where the new text runs longer, which case tag sits on which reference card, reference images. The poster normally goes into the work plan slot.

@@ -62,4 +62,18 @@ describe("tendi/canva write gating", () => {
     expect(isCanvaWriteTool("canva_commit-editing-transaction")).toBe(true);
     expect(isCanvaWriteTool("canva_export-design")).toBe(false);
   });
+
+  it("never lets Tendi open a master template for editing", async () => {
+    const { masterTemplateGuard } = await import("../tendi/canva.js");
+    // copying a master is how every proposal starts
+    expect(masterTemplateGuard("canva_copy-design", { design_id: "DAHWICf3ANs" })).toBeNull();
+    // reading a master is fine, opening an edit transaction on it is not
+    expect(masterTemplateGuard("canva_read-design", { design_id: "DAHWICf3ANs" })).toBeNull();
+    expect(masterTemplateGuard("canva_read-design", { design_id: "DAHWICf3ANs", open_transaction: true })).toMatch(/master template/);
+    expect(masterTemplateGuard("canva_read-design", { design_id: "https://www.canva.com/design/DAHWICf3ANs/edit", open_transaction: true })).toMatch(/master/);
+    expect(masterTemplateGuard("canva_resize-design", { design_id: "DAHRT8eVhhA" })).toMatch(/master/);
+    // the copy is free to edit
+    expect(masterTemplateGuard("canva_read-design", { design_id: "DAHXbZvE-g8", open_transaction: true })).toBeNull();
+    expect(masterTemplateGuard("canva_edit-design", { transaction_id: "abc", operations: [] })).toBeNull();
+  });
 });

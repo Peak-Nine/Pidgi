@@ -86,7 +86,7 @@ What to expect, honestly:
 
 - Verified on 2026-10-07 from a sandbox against the live server: OAuth metadata and scopes, dynamic client registration (Canva issues a client id to an unlisted client), the redirect policy above, and the authorization URL with a localhost redirect leading to Canva's real consent screen.
 - The token exchange and the tool listing are verified by the script itself when it completes (it lists the tools before printing the value).
-- Whiteboards (the Philea methodology poster) are not editable through the API: Canva reports the whiteboard page as not editable (checked 8 Oct 2026). Tendi copies the poster, gives you the ordered find-and-replace map, and once you say it is done exports the copy as a PDF into the thread. The replacing itself stays manual.
+- Whiteboards (the Philea methodology poster): Canva reports the page as not editable, but its edit tool does run find-and-replace on the whole whiteboard when told the page is editable (tested 8 Oct 2026, every occurrence replaced). Tendi copies the poster, shows the ordered replacement list, runs it on your yes, re-reads the copy to check, and gives you the Canva link. This behaviour is not documented by Canva; if it stops working, Tendi falls back to giving you the list to run by hand.
 - On-brand PDFs: the `deliver_canva_pdf` tool exports a filled copy through Canva (PDF) and uploads the file into the Slack thread. It refuses the master templates. Canva's download links are temporary, which is why the file is uploaded instead of linked.
 - Per-user login: the tokens belong to whoever logged in. Use the account that owns the templates.
 - Tool names come from Canva at runtime (prefixed `canva_`), so a change on Canva's side does not need a code change here.

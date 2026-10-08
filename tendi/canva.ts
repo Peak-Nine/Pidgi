@@ -194,6 +194,28 @@ export function isCanvaWriteTool(name: string): boolean {
   return CANVA_WRITE_PATTERN.test(raw);
 }
 
+/** Peak Nine master templates in Canva. Tendi copies them; it never opens one for editing. */
+export const MASTER_TEMPLATE_IDS = ["DAHRT8eVhhA", "DAHKhE6U2vk", "DAHWFiZkv6w", "DAHWICf3ANs"];
+
+/**
+ * Refuse any Canva call that would edit a master template: opening an editing
+ * transaction on one (read-design with open_transaction), or any write tool other
+ * than copy-design that names one. Edits go through a transaction, so blocking the
+ * transaction on a master blocks the edit. Returns an error text, or null when fine.
+ */
+export function masterTemplateGuard(name: string, input: any, ids: string[] = MASTER_TEMPLATE_IDS): string | null {
+  const raw = name.replace(/^canva_/, "");
+  const ref = String(input?.design_id || input?.design_url || "");
+  const hit = ids.find((id) => ref === id || ref.includes(`/design/${id}`) || ref.includes(id));
+  if (!hit) return null;
+  if (/^copy[-_]design$/i.test(raw)) return null;
+  const opensEdit = /^read[-_]design$/i.test(raw) && input?.open_transaction === true;
+  if (opensEdit || isCanvaWriteTool(name)) {
+    return `Blocked: ${hit} is a Peak Nine master template. Copy it first (copy-design) and edit the copy.`;
+  }
+  return null;
+}
+
 function toolName(raw: string): string {
   return ("canva_" + raw).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
 }

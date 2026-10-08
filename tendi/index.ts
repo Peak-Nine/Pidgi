@@ -52,7 +52,7 @@ import {
 import { downloadSlackFile, extractText, inlineBlock, type ExtractedFile, type SlackFileRef } from "./files.js";
 import { buildDocx, DOC_SPEC_SCHEMA, safeFilename } from "./docx.js";
 import { TeamleaderBridge, teamleaderEnabled, type AnthropicToolDef } from "./teamleader.js";
-import { CanvaBridge, canvaConfigured, isCanvaWriteTool } from "./canva.js";
+import { CanvaBridge, canvaConfigured, isCanvaWriteTool, MASTER_TEMPLATE_IDS, masterTemplateGuard } from "./canva.js";
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { downloadPdf, pickDownloadUrl } from "./canva-export.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
@@ -97,7 +97,7 @@ function writeAllowed(slackUserId: string): boolean {
 }
 
 // Canva master templates: never exported or edited directly (see playbooks/07-canva.md).
-const TEMPLATE_IDS = new Set(["DAHRT8eVhhA", "DAHKhE6U2vk", "DAHWFiZkv6w", "DAHWICf3ANs"]);
+const TEMPLATE_IDS = new Set(MASTER_TEMPLATE_IDS);
 
 async function main(): Promise<void> {
   const slackBotToken = need("SLACK_BOT_TOKEN");
@@ -208,12 +208,12 @@ async function main(): Promise<void> {
     {
       name: "deliver_canva_pdf",
       description:
-        "Export a Canva design (a filled copy, never a master template) as an on-brand PDF and post the file into this Slack thread. Works for the proposal doc, the decks and the poster (whiteboards export to PDF too, even though their text cannot be edited through the API). Only call it once the copy has no leftover template text, and say which design you exported. Returns the Slack file link.",
+        "Export a Canva design (a filled copy, never a master template) as an on-brand PDF and post the file into this Slack thread. Use it for the proposal doc and the decks. For the poster, hand over the Canva link of the filled copy instead, and export a PDF only when Niels asks. Only call it once the copy has no leftover template text, and say which design you exported. Returns the Slack file link.",
       input_schema: {
         type: "object",
         properties: {
           design_id: { type: "string", description: "Canva design id of the filled copy (starts with D)." },
-          filename: { type: "string", description: "File name, e.g. 'Peak Nine for Philea - Methodology Poster.pdf'." },
+          filename: { type: "string", description: "File name, e.g. 'Peak Nine for Philea - Technical Proposal.pdf'." },
           pages: { type: "array", items: { type: "integer" }, description: "Optional 1-based pages to export; omit for all." },
           size: { type: "string", enum: ["a4", "a3", "letter", "legal"], description: "Optional paper size for documents. Omit for posters and decks." },
         },
@@ -364,6 +364,8 @@ async function main(): Promise<void> {
     }
     if (name.startsWith("canva_")) {
       if (!canva) return { isError: true, text: "Canva is not configured on this Tendi instance." };
+      const blocked = masterTemplateGuard(name, input);
+      if (blocked) return { isError: true, text: blocked };
       return canva.call(name, input);
     }
     return { isError: true, text: `Unknown tool ${name}.` };
