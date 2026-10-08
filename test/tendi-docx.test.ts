@@ -118,3 +118,13 @@ describe("tendi/prompt", () => {
     for (const b of books) expect(b.text.includes("—"), `${b.name} contains an em dash`).toBe(false);
   });
 });
+
+describe("tendi/canva-export", () => {
+  it("finds the PDF link in Canva's export answer", async () => {
+    const { pickDownloadUrl } = await import("../tendi/canva-export.js");
+    const url = "https://export-download.canva.com/vE-g8/DAHXbZvE-g8/-1/0-25.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=49658";
+    expect(pickDownloadUrl(JSON.stringify({ job: { id: "x", status: "success", urls: [url] } }))).toBe(url);
+    expect(pickDownloadUrl("See https://www.canva.com/design/DAHX/edit, file https://export-download.canva.com/a/b.pdf.")).toBe("https://export-download.canva.com/a/b.pdf");
+    expect(pickDownloadUrl("no link here")).toBeNull();
+  });
+});

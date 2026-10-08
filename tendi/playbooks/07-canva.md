@@ -11,8 +11,9 @@ If Canva is not connected, do not stall the proposal: deliver the drafts, the Wo
 - Editing usually runs as a transaction: start, perform operations, commit (or cancel). If a tool fails mid-transaction, cancel, report, and retry once. Never leave a transaction open.
 - Replace every placeholder token: "Client Name", "XXX", "Lorem ipsum", "Header Subtitle", and template residue such as "OpenTeleRehab", "Enabel", "HI", "OTR", "P&V", "coops.vc", "Febecoop" where the playbook says so. Then re-read the copy and grep your own output for leftovers before you report done.
 - Do not delete pages. Tell Niels which pages to hide or delete manually.
-- Whiteboards (the Philea poster `DAHWICf3ANs`) are not API-editable. Hand Niels the replacement map instead (04-rfp-philea.md).
-- Export to PDF only when the deck has no leftovers, and only if an export tool is available; otherwise say that export is done from Canva by hand.
+- Whiteboards (the Philea poster `DAHWICf3ANs`) cannot be edited through the API: Canva reports the whiteboard page as not editable (checked 8 Oct 2026). Copying and exporting them does work. So for the poster: copy it, hand Niels the replacement map (04-rfp-philea.md), and export the copy once he says it is done.
+- Before you commit an edit, show in the thread what will change (by slide or block) and wait for a yes. Canva's own tools ask for that too.
+- The on-brand PDF: when a filled copy has no leftovers, call `deliver_canva_pdf` with the copy's design id and a clear file name ("Peak Nine for <client> - Technical Proposal.pdf", "Peak Nine for <client> - Methodology Poster.pdf"). It exports through Canva and posts the PDF in the thread. Never export a master template. If export is unavailable, say it is done from Canva by hand.
 - Rate limits exist on Canva's side (copy, export and transaction tools are limited to a handful of calls per minute). Batch text replacements into as few operations as the tools allow, and if you hit a rate-limit error wait and retry once rather than hammering.
 
 ## What to report

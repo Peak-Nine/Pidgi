@@ -4,7 +4,7 @@ Take a new RFP or tender, write a Peak Nine proposal in the structure, tone and 
 
 Source designs in Canva (always copy, never touch):
 - Philea proposal doc, fixed pages, API-editable: Canva ID `DAHWFiZkv6w`
-- Philea V1 methodology poster, whiteboard, NOT API-editable: Canva ID `DAHWICf3ANs`
+- Philea V1 methodology poster, whiteboard, text NOT API-editable (copy and PDF export do work): Canva ID `DAHWICf3ANs`
 
 Standing rules for every line (on top of 00-voice.md):
 - Every claim traces back to the RFP, to something Niels decided, or to a reference case Peak Nine has actually done (05-credentials.md). No invented numbers, clients, results or quotes. Unknowns become `[TO CONFIRM: ...]` or `[TO COMPLETE: ...]` and go on the open-items list.
@@ -65,11 +65,17 @@ Post the master text in the thread for Niels's pass. Iterate.
 
 Draft 1 goes out as a Word file via `build_docx` (Peak Nine document design: page background #F0E7DD, dark green #1E3A2F table headers, small-caps section labels, footer "Peak Nine for <client> · <section>"). Name it "Peak Nine for <client> - Technical and Financial Proposal.docx". The portal split (one file per upload slot) is done by Niels from the master, or by Tendi as separate `build_docx` calls, one per slot, named "<slot number> <slot name> - Peak Nine for <client>.docx", when he asks.
 
-After Niels has marked up draft 1 and Canva is connected: copy `DAHWFiZkv6w`, read the copy to get the text locators, replace the text block by block, commit, and return the edit URL. Export to PDF through Canva when the tools allow it, otherwise tell Niels to export from Canva.
+After Niels has marked up draft 1 and Canva is connected: copy `DAHWFiZkv6w`, read the copy to get the text locators, replace the text block by block, show what changed, commit on his yes, and return the edit URL. Then deliver the on-brand PDF of the copy with `deliver_canva_pdf` ("Peak Nine for <client> - Technical and Financial Proposal.pdf"). If export fails, give the edit URL and say the PDF is exported from Canva by hand.
 
 ## Step 6. The poster
 
-The poster is a whiteboard and cannot be edited through the API. Tendi cannot drive a browser. Give Niels an ordered replacement map instead (as a list he can run through Canva's Find and replace with Match case on):
+The poster is a whiteboard: its text cannot be edited through the API, and Tendi cannot drive a browser. What Tendi does:
+
+1. Copy `DAHWICf3ANs` (the copy works through the API) and save the copy's id and edit URL in the workspace links.
+2. Give Niels the ordered replacement map below, to run through Canva's Find and replace (Match case on) in the copy.
+3. When Niels says the poster is done, export the copy with `deliver_canva_pdf` ("Peak Nine for <client> - Methodology Poster.pdf") so the PDF lands in the thread. The poster PDF is large (about 20 MB for one page).
+
+The replacement map, in this order:
 - reference-case text first, because it contains short words (Benchmark, Roadmap, Draft) used later as chips
 - long strings before any short substring they contain ("Workstream A to B" before "Workstream A")
 - deliverable lines that contain dates before the month labels of the timeline

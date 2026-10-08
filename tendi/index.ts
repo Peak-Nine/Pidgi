@@ -54,6 +54,7 @@ import { buildDocx, DOC_SPEC_SCHEMA, safeFilename } from "./docx.js";
 import { TeamleaderBridge, teamleaderEnabled, type AnthropicToolDef } from "./teamleader.js";
 import { CanvaBridge, canvaConfigured, isCanvaWriteTool } from "./canva.js";
 import { recordUsage, summarizeUsage } from "./usage.js";
+import { downloadPdf, pickDownloadUrl } from "./canva-export.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
 import { startScoutService, scoutConfig } from "./scout/service.js";
 import { scoutDigestBlock, scoutItemBlock } from "./scout/handoff.js";
@@ -94,6 +95,9 @@ function writeAllowed(slackUserId: string): boolean {
   if (WRITE_ALLOWLIST.length === 0) return true;
   return WRITE_ALLOWLIST.includes(slackUserId);
 }
+
+// Canva master templates: never exported or edited directly (see playbooks/07-canva.md).
+const TEMPLATE_IDS = new Set(["DAHRT8eVhhA", "DAHKhE6U2vk", "DAHWFiZkv6w", "DAHWICf3ANs"]);
 
 async function main(): Promise<void> {
   const slackBotToken = need("SLACK_BOT_TOKEN");
@@ -202,6 +206,21 @@ async function main(): Promise<void> {
       input_schema: DOC_SPEC_SCHEMA as any,
     },
     {
+      name: "deliver_canva_pdf",
+      description:
+        "Export a Canva design (a filled copy, never a master template) as an on-brand PDF and post the file into this Slack thread. Works for the proposal doc, the decks and the poster (whiteboards export to PDF too, even though their text cannot be edited through the API). Only call it once the copy has no leftover template text, and say which design you exported. Returns the Slack file link.",
+      input_schema: {
+        type: "object",
+        properties: {
+          design_id: { type: "string", description: "Canva design id of the filled copy (starts with D)." },
+          filename: { type: "string", description: "File name, e.g. 'Peak Nine for Philea - Methodology Poster.pdf'." },
+          pages: { type: "array", items: { type: "integer" }, description: "Optional 1-based pages to export; omit for all." },
+          size: { type: "string", enum: ["a4", "a3", "letter", "legal"], description: "Optional paper size for documents. Omit for posters and decks." },
+        },
+        required: ["design_id"],
+      },
+    },
+    {
       name: "canva_status",
       description:
         "Check whether Canva is connected to Tendi and how many Canva tools are available. Call this before planning any Canva step. If not connected, tell Niels that an admin opens the /canva/connect link once (see the README); meanwhile deliver the drafts, the Word file and a manual Canva checklist.",
@@ -227,7 +246,7 @@ async function main(): Promise<void> {
       ...(threadTs ? { thread_ts: threadTs } : {}),
       file: buffer,
       filename,
-      title: filename.replace(/\.docx$/i, ""),
+      title: filename.replace(/\.(docx|pdf)$/i, ""),
       initial_comment: comment,
     });
     const nested = Array.isArray(r?.files) ? r.files.flatMap((x: any) => (Array.isArray(x?.files) ? x.files : [x])) : [];
@@ -295,6 +314,34 @@ async function main(): Promise<void> {
         return { isError: false, text: JSON.stringify({ uploaded: up.ok, filename, bytes: buffer.length, permalink: up.permalink, note: "The file is in the thread. Mention it by name; do not paste the whole document again." }) };
       } catch (e: any) {
         return { isError: true, text: `build_docx failed: ${e?.message || e}` };
+      }
+    }
+    if (name === "deliver_canva_pdf") {
+      if (!canva || !canva.connected()) return { isError: true, text: "Canva is not connected, so Tendi cannot export. Export the PDF from Canva by hand, or connect Canva first (canva_status)." };
+      const designId = String(input?.design_id || "").trim();
+      if (!/^D[A-Za-z0-9_-]{10}$/.test(designId)) return { isError: true, text: `"${designId}" is not a Canva design id (11 characters, starts with D).` };
+      if (TEMPLATE_IDS.has(designId)) return { isError: true, text: "That is a master template. Export the filled copy instead." };
+      const tool = ["canva_export-design", "canva_export_design"].find((t) => canva!.has(t));
+      if (!tool) return { isError: true, text: "Canva's export tool is not available on this connection. Export from Canva by hand." };
+      const format: any = { type: "pdf" };
+      if (Array.isArray(input?.pages) && input.pages.length) format.pages = input.pages.map(Number).filter((n: number) => n >= 1);
+      if (input?.size) format.size = String(input.size);
+      const res = await canva.call(tool, { design_id: designId, format, user_intent: "Export the filled proposal design as a PDF for the Slack thread" });
+      if (res.isError) return { isError: true, text: `Canva export failed: ${res.text.slice(0, 500)}` };
+      const url = pickDownloadUrl(res.text);
+      if (!url) return { isError: true, text: `Canva did not return a download link. Its answer: ${res.text.slice(0, 500)}` };
+      try {
+        const pdf = await downloadPdf(url);
+        const base = String(input?.filename || `${state.workspace.client || "Peak Nine"} - Proposal`).replace(/\.(pdf|docx)$/i, "");
+        const name2 = safeFilename(`${base}.docx`).replace(/\.docx$/i, ".pdf");
+        const up = await uploadToThread(ctx.channel, ctx.threadTs, name2, pdf, `📕 ${name2}`);
+        if (up.permalink) {
+          state.workspace.links[`pdf:${name2}`] = up.permalink;
+          saveThread(state);
+        }
+        return { isError: false, text: JSON.stringify({ uploaded: up.ok, filename: name2, bytes: pdf.length, permalink: up.permalink, design_id: designId, note: "The PDF is in the thread. Mention it by name." }) };
+      } catch (e: any) {
+        return { isError: true, text: `Exported, but the download or upload failed: ${e?.message || e}. The export link (valid for a limited time): ${url}` };
       }
     }
     if (name === "canva_status") {
