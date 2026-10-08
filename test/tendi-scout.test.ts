@@ -177,6 +177,9 @@ describe("scout/sources", () => {
     expect(prefilter(works).keep).toBe(false);
     expect(worldbankUrl(100)).toContain("procurement_group=CS");
     expect(worldbankUrl(100)).toContain("os=100");
+    // the opportunities view: only notices still open, newest notice first
+    expect(worldbankUrl(0, 100, "2026-10-08")).toContain("deadline_strdate=2026-10-08");
+    expect(worldbankUrl(0)).toContain("srt=noticedate");
   });
 
   it("ReliefWeb waits for an appname instead of hitting the wall", async () => {

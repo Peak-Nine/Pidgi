@@ -131,7 +131,7 @@ Each item shows the buyer, country, deadline, source, a fit score out of 100, tw
 | TED (EU tenders) | Official search API, anonymous, consultancy, research, evaluation and training CPV codes | works, verified 7 Oct 2026 |
 | UNDP procurement notices | Public RSS feed (all regions) | works, verified 7 Oct 2026 |
 | Enabel public procurement | The public "open tenders" list (first 3 pages), then for each shortlisted tender the pages of the tender PDF that decide a bid: cover, award criteria, terms of reference, selection file | works, verified 8 Oct 2026 |
-| World Bank procurement notices | Official search API, anonymous: consulting "Requests for Expression of Interest" from firms, with the full notice text. Individual-consultant posts (mostly project-unit staff) are left out unless `SCOUT_WORLDBANK_INDIVIDUAL=1` | works, verified 8 Oct 2026 |
+| World Bank opportunities (projects-operations/opportunities) | Official search API, anonymous, the same feed the opportunities page uses: every consulting "Request for Expression of Interest" that is still open, with the full notice text. Already-judged notices are skipped, so the first run catches up on everything open. Individual-consultant posts (mostly project-unit staff) are left out unless `SCOUT_WORLDBANK_INDIVIDUAL=1`; goods, works and non-consulting tenders are left out | works, verified 8 Oct 2026 |
 | ReliefWeb jobs (consultancies) | Official API, needs an approved appname | waiting: request one, see below |
 | Belgian e-Procurement (BDA, publicprocurement.be) | Not read. Its search API refuses requests without a login token (403, checked 8 Oct 2026); Scout does not borrow the website's own login to get around that | see below |
 
