@@ -15,7 +15,7 @@ import type { RunSummary, ScoredOpportunity } from "./types.js";
 export const TZ = process.env.SCOUT_TZ || "Europe/Brussels";
 export const START_ACTION_ID = "scout_start_proposal";
 
-const SOURCE_LABEL: Record<string, string> = { ted: "TED", undp: "UNDP", reliefweb: "ReliefWeb", enabel: "Enabel" };
+const SOURCE_LABEL: Record<string, string> = { ted: "TED", undp: "UNDP", worldbank: "World Bank", reliefweb: "ReliefWeb", enabel: "Enabel" };
 const PLAYBOOK_LABEL: Record<string, string> = { "proof-of-change": "Proof of Change", "new-proposal": "Peak Nine proposal", "rfp-philea": "RFP (Philea template)", none: "" };
 
 export function longDate(d = new Date(), tz = TZ): string {

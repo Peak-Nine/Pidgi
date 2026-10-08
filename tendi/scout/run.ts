@@ -6,7 +6,7 @@
  *
  * Posting to Slack lives in digest.ts so the CLI can dry-run without a token.
  * Budgets per run (env, defaults in brackets): SCOUT_LOOKBACK_DAYS [3],
- * SCOUT_MAX_SCORE_PER_RUN [30 per day of lookback], SCOUT_ENABEL_PDF_MAX [30].
+ * SCOUT_MAX_SCORE_PER_RUN [40 per day of lookback], SCOUT_ENABEL_PDF_MAX [30].
  *
  * Enabel tender PDFs: on 8 Oct 2026 reading six of them inside this process took
  * it from about 180 MB to 650 MB, past Render's 512 MB, and both scheduled runs
@@ -24,10 +24,11 @@ import { enabelAdapter, readTenderPdf } from "./sources/enabel.js";
 import { reliefwebAdapter } from "./sources/reliefweb.js";
 import { tedAdapter } from "./sources/ted.js";
 import { undpAdapter } from "./sources/undp.js";
+import { worldbankAdapter } from "./sources/worldbank.js";
 import { isSeen, markSeen, recentFeedback, recordRun, recordScores, saveState } from "./store.js";
 import type { Opportunity, RunSummary, ScoredOpportunity, SourceAdapter, SourceResult } from "./types.js";
 
-export const ADAPTERS: SourceAdapter[] = [tedAdapter, undpAdapter, reliefwebAdapter, enabelAdapter];
+export const ADAPTERS: SourceAdapter[] = [tedAdapter, undpAdapter, worldbankAdapter, reliefwebAdapter, enabelAdapter];
 
 export interface RunOptions {
   anthropic: Anthropic;
@@ -60,7 +61,7 @@ export function isoDaysAgo(days: number, now = new Date()): string {
 
 // Small boost for sources that are closest to Peak Nine's work (Enabel is a client;
 // ReliefWeb consultancies are individual assignments). [assumption, tune freely]
-const SOURCE_BOOST: Record<string, number> = { enabel: 2, reliefweb: 1, undp: 0, ted: 0 };
+const SOURCE_BOOST: Record<string, number> = { enabel: 2, reliefweb: 1, worldbank: 0, undp: 0, ted: 0 };
 
 /**
  * Priority when the per-run scoring cap bites: more keyword hits first, a small
@@ -83,7 +84,7 @@ export async function runScout(opts: RunOptions): Promise<RunResult> {
   const log = opts.log || ((l: string) => console.log(`[scout] ${l}`));
   const lookback = envInt("SCOUT_LOOKBACK_DAYS", opts.lookbackDays || 3) || 3;
   const since = opts.since || isoDaysAgo(lookback, now);
-  const maxScore = envInt("SCOUT_MAX_SCORE_PER_RUN", Math.min(200, 30 * lookback)) || 60;
+  const maxScore = envInt("SCOUT_MAX_SCORE_PER_RUN", Math.min(250, 40 * lookback)) || 60;
   const pdfMax = Math.max(0, envInt("SCOUT_ENABEL_PDF_MAX", 30));
   const startedAt = Date.now();
   const notes: string[] = [];

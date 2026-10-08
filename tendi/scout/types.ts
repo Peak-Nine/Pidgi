@@ -2,7 +2,7 @@
  * Shared types for Tendi Scout, the daily tender watcher.
  */
 
-export type SourceId = "ted" | "undp" | "reliefweb" | "enabel";
+export type SourceId = "ted" | "undp" | "reliefweb" | "enabel" | "worldbank";
 
 export interface Opportunity {
   /** Stable id, prefixed with the source: "ted:681497-2026", "enabel:TZA22003-10792", ... */

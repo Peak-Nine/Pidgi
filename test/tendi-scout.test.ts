@@ -150,6 +150,35 @@ describe("scout/sources", () => {
     expect(parseEnabelDate("soon")).toBe("");
   });
 
+  it("maps a World Bank expression of interest and filters on its title", async () => {
+    const { mapWorldbankNotice, worldbankUrl } = await import("../tendi/scout/sources/worldbank.js");
+    const { prefilter } = await import("../tendi/scout/filter.js");
+    const o = mapWorldbankNotice({
+      id: "OP00452966",
+      notice_type: "Request for Expression of Interest",
+      notice_lang_name: "French",
+      submission_date: "2026-10-06T00:00:00Z",
+      submission_deadline_date: "2026-10-23T00:00:00Z",
+      project_ctry_name: "Niger",
+      project_name: "Projet d'appui aux entrepreneurs",
+      bid_description: "Recrutement de prestataire pour l'accompagnement post-financement des promoteurs",
+      procurement_method_name: "Consultant Qualification Selection",
+      contact_organization: "Unité de coordination",
+      notice_text: "<p>Le consultant devra assurer l&#39;évaluation, la stratégie, le renforcement...</p>",
+    });
+    expect(o.id).toBe("worldbank:OP00452966");
+    expect(o.deadline).toBe("2026-10-23");
+    expect(o.published).toBe("2026-10-06");
+    expect(o.url).toContain("procurement-detail/OP00452966");
+    expect(o.summary).toContain("l'évaluation");
+    expect(prefilter(o).keep).toBe(true);
+    // long boilerplate text alone does not let a works title through
+    const works = { ...o, title: "Suivi contrôle travaux du kori", meta: { project: "Développement urbain" } };
+    expect(prefilter(works).keep).toBe(false);
+    expect(worldbankUrl(100)).toContain("procurement_group=CS");
+    expect(worldbankUrl(100)).toContain("os=100");
+  });
+
   it("ReliefWeb waits for an appname instead of hitting the wall", async () => {
     delete process.env.RELIEFWEB_APPNAME;
     const { reliefwebAdapter } = await import("../tendi/scout/sources/reliefweb.js");

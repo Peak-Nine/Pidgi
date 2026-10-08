@@ -129,11 +129,15 @@ Each item shows the buyer, country, deadline, source, a fit score out of 100, tw
 | TED (EU tenders) | Official search API, anonymous, consultancy, research, evaluation and training CPV codes | works, verified 7 Oct 2026 |
 | UNDP procurement notices | Public RSS feed (all regions) | works, verified 7 Oct 2026 |
 | Enabel public procurement | The public "open tenders" list (first 3 pages), then for each shortlisted tender the pages of the tender PDF that decide a bid: cover, award criteria, terms of reference, selection file | works, verified 8 Oct 2026 |
+| World Bank procurement notices | Official search API, anonymous: consulting "Requests for Expression of Interest" from firms, with the full notice text. Individual-consultant posts (mostly project-unit staff) are left out unless `SCOUT_WORLDBANK_INDIVIDUAL=1` | works, verified 8 Oct 2026 |
 | ReliefWeb jobs (consultancies) | Official API, needs an approved appname | waiting: request one, see below |
+| Belgian e-Procurement (BDA, publicprocurement.be) | Not read. Its search API refuses requests without a login token (403, checked 8 Oct 2026); Scout does not borrow the website's own login to get around that | see below |
 
 Every request goes through `scout/http.ts`: a User-Agent that names Peak Nine and gives a contact address, at least 1.5 seconds between requests to the same host, a small request budget per host per run, conditional requests so unchanged pages cost nothing, backoff on 429 and 5xx that respects `Retry-After`, and a guard that refuses private addresses. On a normal day that adds up to about a dozen requests across all sources. The model side is capped too: at most 60 tenders scored per run (`SCOUT_MAX_SCORE_PER_RUN`), in batches of 10, with the rubric cached. Tenders past the cap are not marked as seen, so they come back the next day while they are still inside the 3-day window.
 
 **ReliefWeb.** Since 1 November 2025 the ReliefWeb API only answers callers with an approved appname; without one it returns 403 (checked live on 7 Oct 2026). Request one, free, at https://apidoc.reliefweb.int/parameters#appname, then set `RELIEFWEB_APPNAME` on Render. Until then Scout notes "waiting for appname" in every digest and skips the source. It does not try the public website instead.
+
+**Belgian e-Procurement (BDA).** Smaller Belgian tenders, under the European thresholds, are only published there. Two clean ways in, both still to check: ask BOSA's e-Procurement helpdesk whether they give API access for automated reading, or let the BDA send its own e-mail alerts for a saved search to a Slack channel's e-mail address, so Scout can read the alerts from Slack. Above-threshold Belgian tenders already reach Scout through TED.
 
 ### Switching it on
 

@@ -52,7 +52,12 @@ export const NATIONAL_ONLY =
 // would let every TED notice through the keyword filter.
 const META_SKIP = new Set(["ted_category", "notice_type", "closing_raw", "status", "legislation"]);
 
+// Sources whose notice text is long boilerplate ("the consultant shall...", "evaluation
+// criteria"): every notice would match, so only the title and project name count.
+const TITLE_ONLY_SOURCES = new Set(["worldbank"]);
+
 export function textOf(o: Opportunity): string {
+  if (TITLE_ONLY_SOURCES.has(o.source)) return `${o.title}\n${o.meta?.project || ""}`.toLowerCase();
   const meta = o.meta ? Object.entries(o.meta).filter(([k]) => !META_SKIP.has(k)).map(([, v]) => v).join(" ") : "";
   return `${o.title}\n${o.summary}\n${meta}`.toLowerCase();
 }
