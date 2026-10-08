@@ -212,6 +212,12 @@ describe("scout/scorer", () => {
     expect(verdictFor(39)).toBe("weak");
   });
 
+  it("keeps the model's dashes out of the digest", async () => {
+    const { houseStyle } = await import("../tendi/scout/scorer.js");
+    expect(houseStyle("Impact frameworks for MFIs \u2014 exactly our work.")).toBe("Impact frameworks for MFIs, exactly our work.");
+    expect(houseStyle("pages 31\u201335")).toBe("pages 31 to 35");
+  });
+
   it("says when the notice text is thin", async () => {
     const { describeForScoring } = await import("../tendi/scout/scorer.js");
     expect(describeForScoring(opp({ summary: "" }), NOW)).toContain("title only");

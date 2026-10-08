@@ -121,6 +121,15 @@ export function buildSystem(rubric: string, fb: { up: Feedback[]; down: Feedback
     .join("\n");
 }
 
+/** Peak Nine house style: no em or en dashes as punctuation, whatever the model wrote. */
+export function houseStyle(t: string): string {
+  return t
+    .replace(/(\d)\s*[\u2013\u2014]\s*(\d)/g, "$1 to $2")
+    .replace(/\s*[\u2014\u2013]\s*/g, ", ")
+    .replace(/\s+--\s+/g, ", ")
+    .replace(/,\s*,/g, ",");
+}
+
 /** Turn whatever the model returned into one valid Score per input item. */
 export function normalizeScores(items: Opportunity[], raw: any, today = new Date()): Score[] {
   const byId = new Map<string, any>();
@@ -135,9 +144,9 @@ export function normalizeScores(items: Opportunity[], raw: any, today = new Date
       return { id: o.id, score: 0, verdict: "weak", why: "Unscored: the scorer returned nothing for this item. Open the notice to judge it.", flags: [...flags], playbook: "none" };
     }
     const n = Math.max(0, Math.min(100, Math.round(Number(s.score) || 0)));
-    for (const f of Array.isArray(s.flags) ? s.flags : []) if (typeof f === "string" && f.trim()) flags.add(clip(f.trim(), 120));
+    for (const f of Array.isArray(s.flags) ? s.flags : []) if (typeof f === "string" && f.trim()) flags.add(clip(houseStyle(f.trim()), 160));
     const pb = ["proof-of-change", "new-proposal", "rfp-philea", "none"].includes(s.playbook) ? s.playbook : "none";
-    return { id: o.id, score: n, verdict: verdictFor(n), why: clip(String(s.why || "").trim(), 400) || "(no reason given)", flags: [...flags].slice(0, o.details ? 9 : 6), playbook: pb };
+    return { id: o.id, score: n, verdict: verdictFor(n), why: clip(houseStyle(String(s.why || "").trim()), 400) || "(no reason given)", flags: [...flags].slice(0, o.details ? 9 : 6), playbook: pb };
   });
 }
 
