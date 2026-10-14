@@ -58,6 +58,7 @@ import { downloadPdf, exportArgs, pickDownloadUrl } from "./canva-export.js";
 import { canvaDocFill, canvaDocMap, type CanvaConn } from "./canva-doc.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
 import { startScoutService, scoutConfig } from "./scout/service.js";
+import { boardConfigNote, boardEnabled, findCards, listCards, scoutStartProposal, scoutThumbsUp, updateCard, upsertCard, STAGES, SOURCES, FITS, PLAYBOOKS, OUTCOMES, ADDED_BY } from "./notion-board.js";
 import { scoutDigestBlock, scoutItemBlock } from "./scout/handoff.js";
 import { itemsForDigest, type SeenRecord } from "./scout/store.js";
 
@@ -104,6 +105,7 @@ function isWriteTool(name: string): boolean {
   if (name.startsWith("teamleader_")) return TL_WRITE_PATTERN.test(name);
   if (name === "canva_doc_fill") return true;
   if (name === "canva_doc_map") return false;
+  if (name === "tender_board") return true;
   if (name.startsWith("canva_")) return isCanvaWriteTool(name);
   return false;
 }
@@ -283,6 +285,46 @@ async function main(): Promise<void> {
       },
     },
     {
+      name: "tender_board",
+      description:
+        "The Tender Board in Notion (kanban: Relevant → Considered → Work in progress → Submitted → Won / Lost / Dropped). action 'find' looks a card up by reference, link or name; 'list' shows a column; 'add' creates or updates a card (same reference or link = same tender); 'update' changes fields on one card (by page_id, or by reference/link/name when unambiguous). Use it when Niels, Jonas or Bertille ask to add, move, assign, close or annotate a tender: 'add the Oxfam tender', 'move Ipas to submitted', 'mark GIZ 10032371 as lost, lesson: price', 'owner Jonas'. Only pass fields the person gave or that are in this thread; never invent a deadline or value. Dates are YYYY-MM-DD. owner_emails are peaknine.studio addresses (Niels, Jonas, Bertille...). Writes are gated to the allowlist. Answer with the card link.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["find", "list", "add", "update"] },
+          page_id: { type: "string", description: "Notion page id of the card (from find/list) for update." },
+          query: { type: "string", description: "For find: a reference, a link or part of the name." },
+          card: {
+            type: "object",
+            description: "Fields to write (add/update). Only the ones you know.",
+            properties: {
+              name: { type: "string", description: "Buyer · short tender title" },
+              stage: { type: "string", enum: [...STAGES] },
+              deadline: { type: "string" },
+              questions_deadline: { type: "string" },
+              owner_emails: { type: "array", items: { type: "string" } },
+              buyer: { type: "string" },
+              source: { type: "string", enum: [...SOURCES] },
+              reference: { type: "string" },
+              link: { type: "string" },
+              fit: { type: "string", enum: [...FITS] },
+              why: { type: "string" },
+              playbook: { type: "string", enum: [...PLAYBOOKS] },
+              estimated_value: { type: "string", description: "With currency, as quoted" },
+              procedure: { type: "string" },
+              submitted_on: { type: "string" },
+              outcome: { type: "string", enum: [...OUTCOMES] },
+              lessons: { type: "string" },
+              debrief_received: { type: "boolean" },
+              added_by: { type: "string", enum: [...ADDED_BY] },
+              notes: { type: "string", description: "Free text appended to the card body" },
+            },
+          },
+        },
+        required: ["action"],
+      },
+    },
+    {
       name: "canva_status",
       description:
         "Check whether Canva is connected to Tendi and how many Canva tools are available. Call this before planning any Canva step. If not connected, tell Niels that an admin opens the /canva/connect link once (see the README); meanwhile deliver the drafts, the Word file and a manual Canva checklist.",
@@ -403,6 +445,48 @@ async function main(): Promise<void> {
         return { isError: false, text: JSON.stringify({ uploaded: up.ok, filename: name2, bytes: pdf.length, permalink: up.permalink, design_id: designId, note: "The PDF is in the thread. Mention it by name." }) };
       } catch (e: any) {
         return { isError: true, text: `Exported, but the download or upload failed: ${e?.message || e}. The export link (valid for a limited time): ${url}` };
+      }
+    }
+    if (name === "tender_board") {
+      if (!boardEnabled()) return { isError: true, text: boardConfigNote() };
+      try {
+        const action = String(input?.action || "");
+        const card = (input?.card || {}) as any;
+        if (action === "list") {
+          const stage = card?.stage || input?.stage;
+          const cards = await listCards(stage, 25);
+          return { isError: false, text: JSON.stringify({ stage: stage || "all", count: cards.length, cards }) };
+        }
+        if (action === "find") {
+          const q = String(input?.query || card?.reference || card?.link || card?.name || "").trim();
+          if (!q) return { isError: true, text: "find needs a query (reference, link or part of the name)." };
+          const isUrl = /^https?:\/\//i.test(q);
+          let cards = isUrl ? await findCards({ link: q }, 5) : await findCards({ reference: q }, 5);
+          if (!cards.length) cards = await findCards({ name: q }, 5);
+          return { isError: false, text: JSON.stringify({ query: q, count: cards.length, cards }) };
+        }
+        if (action === "add") {
+          if (!card?.name) return { isError: true, text: "add needs card.name (Buyer · short title)." };
+          const r = await upsertCard(card);
+          return { isError: false, text: JSON.stringify({ [r.action]: true, card: r.card, notes: r.notes, say: `Card ${r.action}: ${r.card.url}` }) };
+        }
+        if (action === "update") {
+          let pageId = String(input?.page_id || "").trim();
+          if (!pageId) {
+            const q = String(input?.query || card?.reference || card?.link || card?.name || "").trim();
+            if (!q) return { isError: true, text: "update needs page_id, or a query that matches exactly one card." };
+            const isUrl = /^https?:\/\//i.test(q);
+            let cards = isUrl ? await findCards({ link: q }, 5) : await findCards({ reference: q }, 5);
+            if (!cards.length) cards = await findCards({ name: q }, 5);
+            if (cards.length !== 1) return { isError: true, text: `${cards.length} cards match "${q}"; pass page_id. Matches: ${cards.map((c) => `${c.name} (${c.id})`).join("; ") || "none"}` };
+            pageId = cards[0].id;
+          }
+          const r = await updateCard(pageId, card);
+          return { isError: false, text: JSON.stringify({ updated: true, card: r.card, notes: r.notes, say: `Card updated: ${r.card.url}` }) };
+        }
+        return { isError: true, text: `Unknown tender_board action "${action}".` };
+      } catch (e: any) {
+        return { isError: true, text: `Tender Board (Notion) failed: ${e?.body ? String(e.body).slice(0, 400) : e?.message || e}` };
       }
     }
     if (name === "canva_status") {
@@ -823,7 +907,23 @@ async function main(): Promise<void> {
     }
   }
 
-  startScoutService({ app, router: receiver.router, anthropic, adminOk, startProposal: startFromScout });
+  startScoutService({
+    app,
+    router: receiver.router,
+    anthropic,
+    adminOk,
+    startProposal: startFromScout,
+    board: boardEnabled()
+      ? {
+          thumbsUp: (record) => scoutThumbsUp(record),
+          startProposal: async (record, userId) => {
+            const who = await resolveIdentity(userId);
+            return scoutStartProposal(record, who?.email || undefined);
+          },
+        }
+      : null,
+  });
+  console.log(boardEnabled() ? "Tender Board (Notion) connected: tender_board tool on, Scout writes cards." : `Tender Board off: ${boardConfigNote()}`);
 
   app.event("app_mention", async ({ event, say }) => {
     const e: any = event;
