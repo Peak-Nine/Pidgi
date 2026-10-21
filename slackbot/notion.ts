@@ -25,6 +25,7 @@
  *     then pass a matching `properties` object.
  */
 import { Client } from "@notionhq/client";
+import { isTaskBoardDatabase } from "./taskboards.js";
 
 // Pinned, stable Notion API version. If a newer database feature misbehaves,
 // this is the first thing to revisit.
@@ -49,7 +50,7 @@ export function notionEnabled(): boolean {
   return !!process.env.NOTION_TOKEN;
 }
 
-function notionClient(): Client {
+export function notionClient(): Client {
   const auth = process.env.NOTION_TOKEN;
   if (!auth) throw new Error("NOTION_TOKEN is not set");
   // Force the platform's undici-based fetch instead of the SDK's bundled node-fetch,
@@ -324,6 +325,14 @@ export async function handleNotionTool(name: string, input: any): Promise<{ text
     }
 
     if (name === "notion_create_page") {
+      // Rows on the team task boards (Laura's, Sankhya's) only go in through the draft card
+      // and its ✅ button, so a person always checks the task before it lands on the board.
+      if (input.parent_database_id && isTaskBoardDatabase(String(input.parent_database_id))) {
+        return {
+          isError: true,
+          text: "Blocked: new tasks on a team member's board go through the task draft card, so someone checks them before they land. Tell the user to tag Pidgi in the thread with e.g. \"turn this into a task for Laura by Friday\"; Pidgi then reads the thread and posts a draft with an ✅ Add to board button. Updating existing rows is still fine.",
+        };
+      }
       let parent: any;
       let properties: any = input.properties || {};
       if (input.parent_database_id) {

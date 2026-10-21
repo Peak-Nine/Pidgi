@@ -13,6 +13,7 @@
   "scripts": {
     "build": "tsc",
     "slackbot": "tsx slackbot/index.ts",
+    "slackbot:check": "tsc --noEmit -p slackbot/tsconfig.json",
     "tendi": "tsx tendi/index.ts",
     "tendi:check": "tsc --noEmit -p tendi/tsconfig.json",
     "tendi:canva-login": "tsx tendi/canva-login.ts",

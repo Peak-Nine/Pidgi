@@ -42,6 +42,8 @@ import { notionEnabled, notionToolDefs, handleNotionTool } from "./notion.js";
 import { renderShell, gatherDashboardData, gatherFinanceData, dashboardLink } from "./dashboard.js";
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { saveFormValue, loadFormValue, formsPersistent } from "./formstore.js";
+import { runTaskCapture, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
+import { looksLikeTaskRequest } from "./taskboards.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -117,6 +119,11 @@ databases (only those shared with the bot): search to find the page or database,
 learn its exact property names and block IDs, then create pages, append content, update
 properties (e.g. a status), or edit a block. Always read a page or database before changing
 it, and confirm what you're about to write before doing it.
+Team task boards (Laura's and Sankhya's backlog in Notion): you never add rows to them yourself.
+New tasks go through the task draft flow: the user tags you in a thread with e.g. "turn this into
+a task for Laura by Friday", and you post a draft card with an ✅ Add to board button. If someone
+asks you to add a task in another way, tell them to use that phrasing. Reading those boards and
+updating existing rows (e.g. a status) is fine.
 
 Formatting for Slack (important):
 - Slack does NOT render Markdown. Use Slack mrkdwn: *single asterisks* for bold (never **double**),
@@ -994,6 +1001,29 @@ async function main(): Promise<void> {
   const app = new App({ token: slackBotToken, receiver });
   slackWeb = app.client; // used by create_slack_channel / send_slack_message
 
+  // Task capture: "@Pidgi turn this into a task for Laura" → draft card → ✅ → Notion board.
+  let taskDeps: TaskDeps | null = null;
+  if (taskCaptureEnabled()) {
+    let botUserId: string | undefined;
+    try {
+      const who: any = await app.client.auth.test();
+      botUserId = who?.user_id;
+    } catch {
+      /* only used to leave Pidgi's own messages out of the transcript */
+    }
+    taskDeps = {
+      anthropic,
+      model: process.env.TASK_MODEL || MODEL,
+      botUserId,
+      // The person who asked can confirm their own draft; otherwise the write allowlist applies.
+      canConfirm: (userId: string, requesterId: string) => userId === requesterId || writeAllowed(userId),
+    };
+    registerTaskActions(app, taskDeps);
+    console.log("Task capture enabled (draft card → ✅ → Notion board).");
+  } else {
+    console.log("Task capture disabled (needs NOTION_TOKEN).");
+  }
+
   // Dashbird 🐦 — interactive live dashboard.
   function dashKeyOk(req: any, res: any): boolean {
     const key = process.env.DASHBOARD_KEY;
@@ -1131,7 +1161,17 @@ async function main(): Promise<void> {
   // replyThreadTs = where the reply is posted: undefined posts at the top level,
   //                 a thread ts posts inside that thread. Callers decide the rule:
   //                 @mentions reply in a thread, plain DMs reply top-level.
-  async function handle(text: string, slackUserId: string, say: any, convoKey: string, replyThreadTs?: string) {
+  // Keep task captures in the conversation memory, so a follow-up question in the same
+  // channel knows what was drafted.
+  function remember(convoKey: string, userText: string, answer: string) {
+    const history = threadHistory.get(convoKey) ?? [];
+    threadHistory.set(
+      convoKey,
+      [...history, { role: "user" as const, content: userText }, { role: "assistant" as const, content: answer }].slice(-HISTORY_MAX)
+    );
+  }
+
+  async function handle(text: string, slackUserId: string, say: any, convoKey: string, replyThreadTs?: string, ev?: any) {
     const cleaned = text.replace(/<@[A-Z0-9]+>/g, "").trim();
     if (!cleaned) {
       await say({ text: "Ask me about the team's planning, capacity, projects or reservations.", thread_ts: replyThreadTs });
@@ -1151,10 +1191,40 @@ async function main(): Promise<void> {
     // Immediate acknowledgement so the team knows Pidgi is working. This same message
     // is then edited into the final answer, so it never leaves clutter behind.
     let ack: any = null;
-    try {
-      ack = await say({ text: "🕊️ On it — give me a minute…", thread_ts: replyThreadTs });
-    } catch {
-      /* if the ack can't be posted, we just deliver normally below */
+
+    // Task capture first when the message talks about tasks. If it turns out to be a
+    // question ABOUT tasks, its placeholder is reused and the normal brain answers.
+    if (ev && taskDeps && looksLikeTaskRequest(cleaned)) {
+      try {
+        const r = await runTaskCapture(
+          slackWeb,
+          taskDeps,
+          { channel: ev.channel, ts: ev.ts, thread_ts: ev.thread_ts, user: slackUserId, text: ev.text || text, channel_type: ev.channel_type },
+          replyThreadTs
+        );
+        if (r.kind === "handled") {
+          remember(convoKey, cleaned, r.summary);
+          return;
+        }
+        if (r.ack) {
+          ack = r.ack;
+          try {
+            await slackWeb.chat.update({ channel: ack.channel, ts: ack.ts, text: "🕊️ On it — give me a minute…" });
+          } catch {
+            /* the answer will still replace it */
+          }
+        }
+      } catch (e: any) {
+        console.error("[tasks] capture failed, falling back to the normal flow:", e?.message || e);
+      }
+    }
+
+    if (!ack) {
+      try {
+        ack = await say({ text: "🕊️ On it — give me a minute…", thread_ts: replyThreadTs });
+      } catch {
+        /* if the ack can't be posted, we just deliver normally below */
+      }
     }
     try {
       const identity = await resolveIdentity(slackUserId);
@@ -1183,7 +1253,7 @@ async function main(): Promise<void> {
     // this thread so later replies in it continue without needing another @mention.
     const root = e.thread_ts || e.ts;
     joinThread(e.channel, root);
-    await handle(e.text || "", e.user, say, e.channel, root);
+    await handle(e.text || "", e.user, say, e.channel, root, e);
   });
 
   app.event("message", async ({ event, say }) => {
@@ -1192,13 +1262,13 @@ async function main(): Promise<void> {
     if (!firstTime(`${e.channel}:${e.ts}`)) return;
     if (e.channel_type === "im") {
       // Plain DM: full assistant, reply top-level (stay in a thread only if in one).
-      await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
+      await handle(e.text || "", e.user, say, e.channel, e.thread_ts, e);
       return;
     }
     // In a channel thread Pidgi has already joined, keep answering follow-ups (e.g. "yes
     // thanks") without a fresh @mention, and reply inside that same thread.
     if (inActiveThread(e.channel, e.thread_ts)) {
-      await handle(e.text || "", e.user, say, e.channel, e.thread_ts);
+      await handle(e.text || "", e.user, say, e.channel, e.thread_ts, e);
       return;
     }
     // Otherwise Pidgi stays silent on normal channel chatter, EXCEPT a solo 🕊️ summon.

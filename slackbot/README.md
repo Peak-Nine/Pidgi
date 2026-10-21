@@ -75,3 +75,53 @@ npm run build && npm run slackbot         # starts on PORT (default 3000)
   rate, so the bot won't invent one.
 - Write actions are gated by `SLACK_WRITE_ALLOWLIST`. Strongly recommended to set it.
 - Don't paste tokens/secrets into chats or screenshots. Store them only as host env vars.
+
+## Task capture: Slack thread → task on Laura's or Sankhya's Notion board
+
+Tag Pidgi in a thread (or right under the messages you mean) and say who it is for:
+
+> @Pidgi turn this into a task for Laura by Friday
+> @Pidgi maak hier een taak van voor Sankhya
+> @Pidgi task for Laura https://peak-nine.slack.com/archives/C.../p... (a pasted message link is read instead)
+
+What happens:
+1. Pidgi reads the thread it was tagged in. Tagged at the top level, it reads the last 15 messages
+   above and opens the threads under the three most recent ones that have replies.
+2. One Claude call distils the task: title, a few lines of context, the deadline, the project and
+   the links that matter. The code then checks it against the conversation: a deadline is only kept
+   when the words that state it really appear in the thread, links must appear in the thread, and
+   the project must be an existing option on the board. Weekdays come from a calendar table in the
+   prompt, never from the model's own arithmetic.
+3. Each task is posted as a draft card with three pickers (whose board, deadline, project) and three
+   buttons: ✅ Add to board, ✏️ Edit text, Discard. Nothing is written to Notion before ✅.
+4. ✅ writes one row to that person's board: Title, Text (context), Deadline, Project, Status "To Start",
+   Resources (the links plus a link back to the Slack thread) and Owner. The page body says where it
+   came from. The card turns into a link to the new row.
+
+Who can click: the person who asked, plus anyone on `SLACK_WRITE_ALLOWLIST` (everyone if that list is empty).
+
+A question about tasks ("what tasks does Laura have this week?") is recognised as a question and goes to
+Pidgi's normal planning brain. Pidgi's general Notion tools are blocked from adding rows to these boards,
+so every new task passes through a draft card.
+
+The **Owner** column is set to the person who asked (on Laura's board the one filled-in Owner was the
+person who requested the work). Set `"ownerMeans": "assignee"` per board in `TASK_BOARDS` to flip that.
+
+### One-time setup
+
+Slack app (api.slack.com/apps → Pidgi):
+1. **OAuth & Permissions → Bot Token Scopes**: add `channels:history`, `groups:history` and `mpim:history`
+   (to read channel, private channel and group DM threads). `users:read` and `users:read.email` should already
+   be there. Then **Reinstall to Workspace**.
+2. **Interactivity & Shortcuts**: switch on, Request URL = the same as Event Subscriptions:
+   `https://<pidgi-host>/slack/events`. Save.
+3. Pidgi must be a member of the channel it reads (Slack offers to invite it when you tag it).
+
+Notion: open each board page (🐝 Laura's Magic Work, 🧭 Sankhya's Work Board) → ••• → Connections → add the
+Pidgi integration. Without that, ✅ answers with a "no access" message and the draft stays.
+
+Render: nothing new is required. Optional: `TASK_MODEL`, `TASK_BOARDS`, `TASK_NOTION_PEOPLE` (see `.env.example`).
+
+Code: `slackbot/taskboards.ts` (config + pure helpers, unit-tested in `test/pidgi-taskboards.test.ts`) and
+`slackbot/tasks.ts` (Slack, Notion and Claude calls; flow test in `test/pidgi-tasks-flow.test.ts`).
+Typecheck with `npm run slackbot:check`.
