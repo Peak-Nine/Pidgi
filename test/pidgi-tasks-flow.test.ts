@@ -9,9 +9,10 @@ const notionCalls: any[] = [];
 vi.mock("../slackbot/notion.js", () => ({
   notionClient: () => ({
     databases: {
-      retrieve: async () => ({
-        properties: { Project: { select: { options: [{ name: "Takeda" }, { name: "KBS Allez Circulez" }, { name: "Marketing" }] } } },
-      }),
+      retrieve: async ({ database_id }: any) =>
+        database_id === "3f9c675ff95880aeb5fdff8f398a60b4"
+          ? { properties: { Project: { select: { options: [{ name: "KBS" }, { name: "INTERNAL" }] } } } }
+          : { properties: { Project: { select: { options: [{ name: "Takeda" }, { name: "KBS Allez Circulez" }, { name: "Marketing" }] } } } },
     },
     pages: {
       create: async (args: any) => {
@@ -28,6 +29,7 @@ const USERS: Record<string, any> = {
   UNIELS: { real_name: "Niels Van Espen", profile: { email: "niels@peaknine.studio" } },
   ULAURA: { real_name: "Laura Lang", profile: { email: "laura@peaknine.studio" } },
   UJONAS: { real_name: "Jonas Burm", profile: { email: "jonas@peaknine.studio" } },
+  UBERT: { real_name: "Bertille Masse", profile: { email: "bertille@peaknine.studio" } },
   UBOT: { real_name: "Pidgi", profile: {} },
 };
 
@@ -85,7 +87,8 @@ describe("task capture flow", () => {
       problem: "",
       tasks: [
         {
-          assignee: "laura",
+          board: "laura",
+          responsible: "",
           title: "Design the Allez Circulez kickoff poster",
           context: "First version of the kickoff poster, A2 — two colour options.",
           deadline: "2026-10-23",
@@ -148,7 +151,7 @@ describe("task capture flow", () => {
     expect(slack.calls.ephemeral?.[0]?.text).toMatch(/Only <@UNIELS>/);
 
     // Moving the deadline in the picker redraws the card with the new date in the draft.
-    await actions[String(/^(p9task_owner|p9task_deadline|p9task_project)$/)]({
+    await actions[String(/^(p9task_owner|p9task_deadline|p9task_project|p9task_resp)$/)]({
       ack,
       body: { ...body("UNIELS"), state: undefined },
       action: { action_id: "p9task_deadline", type: "datepicker", selected_date: "2026-10-26" },
@@ -194,7 +197,7 @@ describe("task capture flow", () => {
 
   it("says who has a board when the person has none", async () => {
     const slack = fakeSlack(THREAD);
-    const claude = fakeClaude({ is_task_request: true, problem: "", tasks: [{ assignee: "unknown", title: "x", context: "", deadline: "", deadline_quote: "", project: "", urls: [] }] });
+    const claude = fakeClaude({ is_task_request: true, problem: "", tasks: [{ board: "unknown", title: "x", context: "", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] }] });
     const r = await runTaskCapture(
       slack,
       { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: () => true },
@@ -202,7 +205,9 @@ describe("task capture flow", () => {
       "1789000000.000100"
     );
     expect(r.kind).toBe("handled");
-    expect(slack.calls.update[0].text).toBe("I have boards for Laura and Sankhya so far. Who should this go to?");
+    expect(slack.calls.update[0].text).toBe(
+      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda and the Team sync talking points so far. Which one should this go to?"
+    );
   });
 
   it("explains a missing Slack scope instead of failing silently", async () => {
@@ -218,5 +223,114 @@ describe("task capture flow", () => {
     );
     expect(r.kind).toBe("handled");
     expect(slack.calls.update[0].text).toContain("`channels:history`");
+  });
+
+  it("puts a topic on the Touchdown agenda for Niels, with Jonas picking it up", async () => {
+    notionCalls.length = 0;
+    const slack = fakeSlack(THREAD);
+    const claude = fakeClaude({
+      is_task_request: true,
+      problem: "",
+      tasks: [
+        {
+          board: "touchdown",
+          title: "Poster budget for Allez Circulez",
+          context: "Decide whether we print A2 in two colour options.",
+          deadline: "",
+          deadline_quote: "",
+          project: "KBS Allez Circulez",
+          responsible: "Jonas",
+          urls: [],
+        },
+      ],
+    });
+    const deps = { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: (u: string, r: string) => u === r || u === "UBERT" };
+    await runTaskCapture(
+      slack,
+      deps,
+      { channel: "C1", ts: "1789000180.000400", thread_ts: "1789000000.000100", user: "UNIELS", text: "<@UBOT> zet dit op de touchdown" },
+      "1789000000.000100"
+    );
+    expect(claude.seen[0].messages[0].content).toContain("touchdown: Touchdown agenda");
+    const card = slack.calls.update[0];
+    const fields = card.blocks.find((b: any) => b.block_id === "p9task_fields");
+    expect(fields.elements.map((e: any) => e.action_id)).toEqual(["p9task_owner", "p9task_deadline", "p9task_resp"]);
+    expect(fields.elements[2].initial_option.value).toBe("jonas@peaknine.studio");
+
+    const actions: Record<string, any> = {};
+    registerTaskActions({ action: (id: any, fn: any) => (actions[String(id)] = fn), view: () => {} }, deps);
+    const createBtn = card.blocks.find((b: any) => b.block_id === "p9task_buttons").elements[0];
+    expect(JSON.parse(createBtn.value).p).toBeNull(); // Touchdown has no project column
+    const body = (user: string) => ({ user: { id: user }, channel: { id: "C1" }, message: { ts: "9.1", blocks: card.blocks }, state: { values: {} } });
+    const ack = async () => {};
+
+    // Bertille is on the write list, but Touchdown is Niels and Jonas only.
+    await actions["p9task_create"]({ ack, body: body("UBERT"), action: createBtn, client: slack });
+    expect(notionCalls).toHaveLength(0);
+    expect(slack.calls.ephemeral.pop().text).toMatch(/Touchdown agenda is private/);
+
+    await actions["p9task_create"]({ ack, body: body("UNIELS"), action: createBtn, client: slack });
+    expect(notionCalls).toHaveLength(1);
+    const row = notionCalls[0];
+    expect(row.parent).toEqual({ database_id: "2d5c675ff9588011ac09cd22663b3c68" });
+    expect(Object.keys(row.properties).sort()).toEqual(["Assignee", "Description", "Status", "Task name"]);
+    expect(row.properties.Status).toEqual({ status: { name: "Not started" } });
+    expect(row.properties.Assignee).toEqual({ people: [{ id: "274d872b-594c-81ae-9cba-0002e52cea03" }] });
+    const done = JSON.stringify(slack.calls.update[slack.calls.update.length - 1].blocks);
+    expect(done).toContain("Added to the <https://www.notion.so/2d5c675ff958800f919aea617356cc23|Touchdown agenda>");
+    expect(done).toContain("Assignee: Jonas");
+  });
+
+  it("never shows the Touchdown agenda to the rest of the team", async () => {
+    const slack = fakeSlack(THREAD);
+    const claude = fakeClaude({ is_task_request: true, problem: "", tasks: [{ board: "unknown", title: "x", context: "", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] }] });
+    await runTaskCapture(
+      slack,
+      { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: () => true },
+      { channel: "C1", ts: "1789000180.000400", thread_ts: "1789000000.000100", user: "ULAURA", text: "<@UBOT> put this on the touchdown" },
+      "1789000000.000100"
+    );
+    const prompt = claude.seen[0].messages[0].content as string;
+    expect(prompt).not.toContain("touchdown:");
+    expect(prompt).not.toContain("Niels and Jonas");
+    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "team", "unknown"]);
+    expect(slack.calls.update[0].text).toBe("I can add things to Laura's board, Sankhya's board and the Team sync talking points so far. Which one should this go to?");
+  });
+
+  it("puts a talking point on the team sync with the asker as Creator", async () => {
+    notionCalls.length = 0;
+    const slack = fakeSlack(THREAD);
+    const claude = fakeClaude({
+      is_task_request: true,
+      problem: "",
+      tasks: [{ board: "team", title: "Poster sizes for all programmes", context: "A2 or A3 as the default?", deadline: "", deadline_quote: "", project: "INTERNAL", responsible: "", urls: [] }],
+    });
+    const deps = { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: (u: string, r: string) => u === r };
+    await runTaskCapture(
+      slack,
+      deps,
+      { channel: "C1", ts: "1789000180.000400", thread_ts: "1789000000.000100", user: "ULAURA", text: "<@UBOT> talking point for the team sync" },
+      "1789000000.000100"
+    );
+    const card = slack.calls.update[0];
+    const actions: Record<string, any> = {};
+    registerTaskActions({ action: (id: any, fn: any) => (actions[String(id)] = fn), view: () => {} }, deps);
+    const createBtn = card.blocks.find((b: any) => b.block_id === "p9task_buttons").elements[0];
+    await actions["p9task_create"]({
+      ack: async () => {},
+      body: { user: { id: "ULAURA" }, channel: { id: "C1" }, message: { ts: "9.1", blocks: card.blocks }, state: { values: {} } },
+      action: createBtn,
+      client: slack,
+    });
+    expect(notionCalls).toHaveLength(1);
+    const row = notionCalls[0];
+    expect(row.parent).toEqual({ database_id: "3f9c675ff95880aeb5fdff8f398a60b4" });
+    expect(row.properties).toMatchObject({
+      Task: { title: [{ text: { content: "Poster sizes for all programmes" } }] },
+      ".": { status: { name: "Not started" } },
+      Project: { select: { name: "INTERNAL" } },
+      Creator: { people: [{ id: "380d872b-594c-81ad-9c03-000226cbb638" }] },
+    });
+    expect(JSON.stringify(row.children)).toContain("A2 or A3 as the default?");
   });
 });

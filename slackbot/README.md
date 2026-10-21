@@ -76,36 +76,59 @@ npm run build && npm run slackbot         # starts on PORT (default 3000)
 - Write actions are gated by `SLACK_WRITE_ALLOWLIST`. Strongly recommended to set it.
 - Don't paste tokens/secrets into chats or screenshots. Store them only as host env vars.
 
-## Task capture: Slack thread → task on Laura's or Sankhya's Notion board
+## Task capture: Slack thread → item on a Notion board
 
-Tag Pidgi in a thread (or right under the messages you mean) and say who it is for:
+Tag Pidgi in a thread (or right under the messages you mean) and say where it should go:
 
 > @Pidgi turn this into a task for Laura by Friday
 > @Pidgi maak hier een taak van voor Sankhya
+> @Pidgi zet dit op de touchdown
+> @Pidgi talking point for the team sync
 > @Pidgi task for Laura https://peak-nine.slack.com/archives/C.../p... (a pasted message link is read instead)
+
+The boards (all in `slackbot/taskboards.ts`):
+
+| Key | Board in Notion | What goes there | Who can use it |
+| --- | --- | --- | --- |
+| `laura` | 🐝 Laura's Magic Work → Backlog | Laura's tasks | everyone |
+| `sankhya` | 🧭 Sankhya's Work Board → Backlog | Sankhya's tasks | everyone |
+| `touchdown` | 🏈 Touchdown → ✨ Agenda | topics for the Niels and Jonas one-on-one | Niels and Jonas only |
+| `team` | 🚂 Peak Nine Syncs (Internal) → ✏️ Talking Points | topics for the team meeting | everyone |
 
 What happens:
 1. Pidgi reads the thread it was tagged in. Tagged at the top level, it reads the last 15 messages
    above and opens the threads under the three most recent ones that have replies.
-2. One Claude call distils the task: title, a few lines of context, the deadline, the project and
-   the links that matter. The code then checks it against the conversation: a deadline is only kept
-   when the words that state it really appear in the thread, links must appear in the thread, and
-   the project must be an existing option on the board. Weekdays come from a calendar table in the
-   prompt, never from the model's own arithmetic.
-3. Each task is posted as a draft card with three pickers (whose board, deadline, project) and three
-   buttons: ✅ Add to board, ✏️ Edit text, Discard. Nothing is written to Notion before ✅.
-4. ✅ writes one row to that person's board: Title, Text (context), Deadline, Project, Status "To Start",
-   Resources (the links plus a link back to the Slack thread) and Owner. The page body says where it
-   came from. The card turns into a link to the new row.
+2. One Claude call distils the item: board, title, a few lines of context, deadline, project, links,
+   and on meeting boards who picks it up. The code then checks it against the conversation: a deadline
+   is only kept when the words that state it really appear in the thread, links must appear in the
+   thread, the project must be an option on that board, the person must be on the team, and the board
+   must be one the requester may use. Weekdays come from a calendar table in the prompt, never from the
+   model's own arithmetic.
+3. Each item is posted as a draft card with pickers (board, deadline, project, and on meeting boards
+   who picks it up) and three buttons: ✅ Add to board, ✏️ Edit text, Discard. Nothing is written to
+   Notion before ✅.
+4. ✅ writes one row with that board's own columns. Context and links go in a column when the board has
+   one, otherwise in the page body. The page body always says where it came from, with a link back to
+   the Slack thread. The card turns into a link to the new row.
+
+Who fills which person column:
+- Laura's and Sankhya's boards: **Owner** = the person who asked (on Laura's board the one filled-in
+  Owner was the person who requested the work).
+- Touchdown agenda: **Assignee** = whoever the conversation names as picking it up (editable on the card).
+- Team sync talking points: **Creator** = the person who asked, **Assignee** = whoever picks it up.
 
 Who can click: the person who asked, plus anyone on `SLACK_WRITE_ALLOWLIST` (everyone if that list is empty).
 
-A question about tasks ("what tasks does Laura have this week?") is recognised as a question and goes to
-Pidgi's normal planning brain. Pidgi's general Notion tools are blocked from adding rows to these boards,
-so every new task passes through a draft card.
+**The Touchdown agenda is private to Niels and Jonas.** For anyone else it isn't offered to the model,
+isn't in the board picker, and ✅ refuses it. Pidgi's general Notion tools also hide the whole Touchdown
+page (the agenda, the mental check-in, Projects and the archive) from everyone else: search leaves it out,
+and opening, querying or editing it is refused. That check looks at the item and the level above it, so
+keep private pages directly on the Touchdown page or in its databases. The draft card itself shows up in
+the thread where you tag Pidgi, so for sensitive topics tag Pidgi in a DM (paste the message link there).
 
-The **Owner** column is set to the person who asked (on Laura's board the one filled-in Owner was the
-person who requested the work). Set `"ownerMeans": "assignee"` per board in `TASK_BOARDS` to flip that.
+A question about tasks ("what tasks does Laura have this week?", "what's on the Touchdown agenda?") is
+recognised as a question and goes to Pidgi's normal brain. Pidgi's general Notion tools are blocked from
+adding rows to any of these boards, so every new item passes through a draft card.
 
 ### One-time setup
 
@@ -117,11 +140,13 @@ Slack app (api.slack.com/apps → Pidgi):
    `https://<pidgi-host>/slack/events`. Save.
 3. Pidgi must be a member of the channel it reads (Slack offers to invite it when you tag it).
 
-Notion: open each board page (🐝 Laura's Magic Work, 🧭 Sankhya's Work Board) → ••• → Connections → add the
-Pidgi integration. Without that, ✅ answers with a "no access" message and the draft stays.
+Notion: add the Pidgi integration (••• → Connections) to 🐝 Laura's Magic Work, 🧭 Sankhya's Work Board,
+the ✏️ Talking Points database on Peak Nine Syncs (Internal), and the ✨ Agenda database on Touchdown.
+Without that, ✅ answers with a "no access" message and the draft stays.
 
-Render: nothing new is required. Optional: `TASK_MODEL`, `TASK_BOARDS`, `TASK_NOTION_PEOPLE` (see `.env.example`).
+Render: nothing new is required. Optional: `TASK_MODEL`, `TASK_BOARDS`, `TASK_TEAM` (see `.env.example`).
 
-Code: `slackbot/taskboards.ts` (config + pure helpers, unit-tested in `test/pidgi-taskboards.test.ts`) and
-`slackbot/tasks.ts` (Slack, Notion and Claude calls; flow test in `test/pidgi-tasks-flow.test.ts`).
-Typecheck with `npm run slackbot:check`.
+Code: `slackbot/taskboards.ts` (boards, team and pure helpers, unit-tested in `test/pidgi-taskboards.test.ts`),
+`slackbot/tasks.ts` (Slack, Notion and Claude calls; flow tests in `test/pidgi-tasks-flow.test.ts`) and the
+private-board guard in `slackbot/notion.ts` (`test/pidgi-notion-guard.test.ts`). Typecheck with
+`npm run slackbot:check`.

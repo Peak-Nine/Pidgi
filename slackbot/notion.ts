@@ -25,7 +25,7 @@
  *     then pass a matching `properties` object.
  */
 import { Client } from "@notionhq/client";
-import { isTaskBoardDatabase } from "./taskboards.js";
+import { isTaskBoardDatabase, normId } from "./taskboards.js";
 
 // Pinned, stable Notion API version. If a newer database feature misbehaves,
 // this is the first thing to revisit.
@@ -275,9 +275,72 @@ export const notionToolDefs = [
   },
 ];
 
-export async function handleNotionTool(name: string, input: any): Promise<{ text: string; isError: boolean }> {
+/**
+ * Private boards (the Touchdown agenda and the rest of the Touchdown page) are hidden from
+ * people outside their circle. index.ts passes the ids this Slack user may not touch; any
+ * read or write that lands on one of them, or on a row or block directly under one, is refused.
+ */
+export interface NotionAccess {
+  hiddenIds?: string[];
+}
+
+const PRIVATE_MSG = "That page is private to a smaller group, so I can't open or change it for you.";
+
+/** The id itself plus its parent (database, page or block), so rows and sub-pages count too. */
+async function idAndParents(c: Client, id: string): Promise<string[]> {
+  const out = [normId(id)];
+  const parentIds = (o: any): string[] => [o?.parent?.database_id, o?.parent?.page_id, o?.parent?.block_id].filter(Boolean).map(String);
+  try {
+    const page: any = await c.pages.retrieve({ page_id: id });
+    out.push(...parentIds(page).map(normId));
+    return out;
+  } catch {
+    /* not a page: try it as a block */
+  }
+  try {
+    const blk: any = await c.blocks.retrieve({ block_id: id });
+    const parents = parentIds(blk);
+    out.push(...parents.map(normId));
+    // A block inside a row: look one more level up.
+    for (const pid of parents) {
+      try {
+        const page: any = await c.pages.retrieve({ page_id: pid });
+        out.push(...parentIds(page).map(normId));
+      } catch {
+        /* the parent was not a page */
+      }
+    }
+  } catch {
+    /* unknown id: the real call below will report it */
+  }
+  return out;
+}
+
+async function touchesHidden(c: Client, id: string | undefined, hidden: Set<string>): Promise<boolean> {
+  if (!id || !hidden.size) return false;
+  if (hidden.has(normId(id))) return true;
+  return (await idAndParents(c, String(id))).some((x) => hidden.has(x));
+}
+
+export async function handleNotionTool(name: string, input: any, access: NotionAccess = {}): Promise<{ text: string; isError: boolean }> {
   try {
     const c = notionClient();
+    const hidden = new Set((access.hiddenIds || []).map(normId));
+    if (hidden.size) {
+      const target =
+        name === "notion_get_page" || name === "notion_append_blocks" || name === "notion_update_page_properties"
+          ? input?.page_id
+          : name === "notion_query_database"
+            ? input?.database_id
+            : name === "notion_update_block"
+              ? input?.block_id
+              : name === "notion_create_page"
+                ? input?.parent_database_id || input?.parent_page_id
+                : name === "notion_create_database"
+                  ? input?.parent_page_id
+                  : undefined;
+      if (await touchesHidden(c, target, hidden)) return { text: PRIVATE_MSG, isError: true };
+    }
 
     if (name === "notion_search") {
       const res: any = await withRetry(() => c.search({
@@ -285,7 +348,9 @@ export async function handleNotionTool(name: string, input: any): Promise<{ text
         filter: input.object_type ? { property: "object", value: input.object_type } : undefined,
         page_size: input.page_size || 25,
       }));
-      const items = (res.results || []).map((r: any) => ({
+      const isHidden = (r: any) =>
+        [r?.id, r?.parent?.database_id, r?.parent?.page_id, r?.parent?.block_id].filter(Boolean).some((x: string) => hidden.has(normId(x)));
+      const items = (res.results || []).filter((r: any) => !isHidden(r)).map((r: any) => ({
         id: r.id,
         object: r.object,
         title: titleOf(r),
@@ -325,12 +390,12 @@ export async function handleNotionTool(name: string, input: any): Promise<{ text
     }
 
     if (name === "notion_create_page") {
-      // Rows on the team task boards (Laura's, Sankhya's) only go in through the draft card
+      // Rows on the team boards (Laura's, Sankhya's, Touchdown, team sync) only go in through the draft card
       // and its ✅ button, so a person always checks the task before it lands on the board.
       if (input.parent_database_id && isTaskBoardDatabase(String(input.parent_database_id))) {
         return {
           isError: true,
-          text: "Blocked: new tasks on a team member's board go through the task draft card, so someone checks them before they land. Tell the user to tag Pidgi in the thread with e.g. \"turn this into a task for Laura by Friday\"; Pidgi then reads the thread and posts a draft with an ✅ Add to board button. Updating existing rows is still fine.",
+          text: "Blocked: new items on the team boards (Laura's and Sankhya's boards, the Touchdown agenda, the team sync talking points) go through the draft card, so someone checks them before they land. Tell the user to tag Pidgi in the thread with e.g. \"turn this into a task for Laura by Friday\" or \"put this on the Touchdown agenda\"; Pidgi then reads the thread and posts a draft with an ✅ Add to board button. Updating existing rows is still fine.",
         };
       }
       let parent: any;

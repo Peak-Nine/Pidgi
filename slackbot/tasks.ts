@@ -1,21 +1,22 @@
 /**
  * Task capture for Pidgi: the Slack, Notion and Anthropic side.
  *
- * Tag Pidgi with something like "turn this into a task for Laura by Friday":
+ * Tag Pidgi with something like "turn this into a task for Laura by Friday" or
+ * "put this on the Touchdown agenda":
  *   1. Pidgi reads the thread it was tagged in. Tagged at the top level of a channel or a DM,
  *      it reads the messages just above (and opens the threads under the most recent ones).
  *      A pasted Slack message link is read instead, wherever it lives.
- *   2. One Claude call distils concrete tasks (title, context, deadline, project, links).
- *      The code then checks every claim against the conversation (see validateDistilled).
- *   3. Each task is posted as a draft card with pickers for board, deadline and project.
- *   4. "✅ Add to board" writes the row to that person's Notion board. Nothing is written
- *      before that click.
+ *   2. One Claude call distils the items (title, context, board, deadline, project, links,
+ *      who picks it up). The code then checks every claim against the conversation.
+ *   3. Each item is posted as a draft card with pickers.
+ *   4. "✅ Add to board" writes the row to the Notion board. Nothing is written before that.
+ *
+ * Boards can be restricted to a few people (the Touchdown agenda is Niels and Jonas only):
+ * for anyone else such a board is not offered to the model, not shown in the picker, and
+ * refused on "Add to board".
  *
  * If the message only talks ABOUT tasks ("what tasks does Laura have this week?"), the
  * distil step says so and the message goes to Pidgi's normal planning brain instead.
- *
- * Slack scopes needed on top of Pidgi's: channels:history, groups:history (and mpim:history
- * for group DMs). Interactivity must be on, with the same Request URL as events.
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { notionClient } from "./notion.js";
@@ -24,10 +25,14 @@ import {
   A,
   DraftPayload,
   TaskBoard,
+  TeamMember,
   TranscriptLine,
   applyFieldState,
   boardOf,
+  boardRef,
+  boardsFor,
   calendarLines,
+  canUseBoard,
   decodeDraft,
   discardedBlocks,
   doneBlocks,
@@ -37,9 +42,10 @@ import {
   formatTranscript,
   houseStyle,
   loadBoards,
-  loadNotionPeople,
+  loadTeam,
   mentionedUserIds,
   notionChildren,
+  notionIdFor,
   notionProperties,
   parseSlackPermalinks,
   readFieldState,
@@ -71,7 +77,7 @@ export type CaptureResult =
   | { kind: "not_task"; ack: { channel: string; ts: string } | null };
 
 const BOARDS: TaskBoard[] = loadBoards();
-const PEOPLE = loadNotionPeople();
+const TEAM: TeamMember[] = loadTeam();
 
 // ── Small caches ────────────────────────────────────────────────────────────
 
@@ -98,28 +104,34 @@ async function person(client: any, userId: string): Promise<{ name: string; emai
 const schemaCache = new Map<string, { at: number; projects: string[] }>();
 /** Project options straight from the board's Notion schema (cached 10 minutes). */
 async function projectOptions(board: TaskBoard | undefined): Promise<string[]> {
-  if (!board) return [];
+  if (!board?.fields.project) return [];
   const hit = schemaCache.get(board.databaseId);
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.projects;
   try {
     const db: any = await notionClient().databases.retrieve({ database_id: board.databaseId });
-    const prop = db?.properties?.[board.props.project];
+    const prop = db?.properties?.[board.fields.project];
     const projects: string[] = (prop?.select?.options || prop?.multi_select?.options || []).map((o: any) => String(o.name));
     schemaCache.set(board.databaseId, { at: Date.now(), projects });
     return projects;
   } catch (e: any) {
-    console.warn(`[tasks] could not read the schema of ${board.name}'s board: ${e?.message || e}`);
+    console.warn(`[tasks] could not read the schema of ${board.label}: ${e?.message || e}`);
     return hit?.projects || [];
   }
 }
 
-async function allProjectOptions(): Promise<string[]> {
-  const lists = await Promise.all(BOARDS.map((b) => projectOptions(b)));
-  return Array.from(new Set(lists.flat()));
+async function projectOptionsByBoard(boards: TaskBoard[]): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  await Promise.all(boards.map(async (b) => (out[b.key] = await projectOptions(b))));
+  return out;
 }
 
 function slackError(e: any): string {
   return String(e?.data?.error || e?.message || e);
+}
+
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] || "nobody";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 // ── 1. Read the conversation ────────────────────────────────────────────────
@@ -201,7 +213,7 @@ async function gatherContext(client: any, ev: TaskEvent, botUserId?: string): Pr
     lines.push({ ts: m.ts, author, text, depth });
     for (const r of m.__replies || []) push(r, 1);
   };
-  for (const m of msgs) push(m, mode === "thread" || mode === "linked message" ? (m.ts === (msgs[0]?.ts) ? 0 : 1) : 0);
+  for (const m of msgs) push(m, mode === "thread" || mode === "linked message" ? (m.ts === msgs[0]?.ts ? 0 : 1) : 0);
 
   let sourceLink: string | null = null;
   try {
@@ -229,27 +241,29 @@ async function gatherContext(client: any, ev: TaskEvent, botUserId?: string): Pr
 
 // ── 2. Distil ───────────────────────────────────────────────────────────────
 
-const DISTIL_SYSTEM = `You turn Slack conversations at Peak Nine (a small impact innovation studio in Belgium) into concrete tasks for a team member's Notion board.
+const DISTIL_SYSTEM = `You turn Slack conversations at Peak Nine (a small impact innovation studio in Belgium) into items on a Notion board: a task on a team member's own board, or a topic on a meeting agenda.
 
-You receive the request (the message that tagged the bot), who asked, and the conversation it refers to. Decide first:
-- is_task_request = true when the person asks to create, add, log or capture one or more tasks/to-dos (in English, Dutch or French).
-- is_task_request = false when they ask a QUESTION about tasks or planning (e.g. "what tasks does Laura have?", "is Sankhya free?"). Then return no tasks.
+You receive the request (the message that tagged the bot), who asked, the boards they can use, and the conversation it refers to. Decide first:
+- is_task_request = true when the person asks to create, add, log, capture or put something on a board or agenda (in English, Dutch or French): "turn this into a task for Laura", "zet dit op de touchdown", "add to the team meeting".
+- is_task_request = false when they ask a QUESTION about tasks, agendas or planning ("what tasks does Laura have?", "what's on the Touchdown agenda?", "is Sankhya free?"). Then return no tasks.
 
-When it is a task request, write tasks with these rules:
+When it is a task request, write items with these rules:
 - Only use what is in the request and the conversation. Never invent scope, people, dates, numbers, links or reasons. If something is unclear, leave it out rather than guess.
-- assignee: the board key of the person the requester names ("for Laura" means laura). "me"/"mij" means the requester. If the named person has no board in the list, use "unknown".
-- Usually one task. Split into several only when the requester asks for several or the conversation holds clearly separate deliverables for the person. At most 5.
-- title: a short concrete action that starts with a verb, at most 80 characters, in the language the requester wrote in.
-- context: one to four plain sentences: what to deliver, for whom or why, and any constraint or reference mentioned. Same language as the title. Warm and direct, no jargon, no buzzwords, no em dashes, no "it's not X, it's Y" phrasing.
-- deadline: only when a date or day is actually said for this work, in the request or the conversation. Resolve relative words ("Friday", "tomorrow", "next week", "vrijdag", "eind deze maand") using the calendar and the date of the message where they were said, not today's date. A period without a day ("next week", "eind deze maand") means the last working day (Mon-Fri) of that period. Return YYYY-MM-DD. deadline_quote = the exact words that state it, copied character for character. If no deadline is said, return empty strings for both. "asap" or "soon" is not a date.
-- project: one of the listed project options, only when the channel name or the conversation makes it clear; otherwise empty string.
-- urls: links that literally appear in the conversation and that the person needs for this task. Copy them exactly. Otherwise an empty list.
-- problem: empty string, unless it is a task request you cannot turn into a task (for example nothing concrete to do). Then one short plain sentence saying what is missing.`;
+- board: the key of the board the requester points to. "for Laura" means Laura's board; "touchdown", "our one-on-one" means the Touchdown board; "team meeting", "sync", "talking point" means the team board. "for me"/"voor mij" means the requester's own board if they have one. If the requester names a person or meeting that has no board in the list, use "unknown". Never pick a board that isn't in the list.
+- Usually one item. Split into several only when the requester asks for several or the conversation holds clearly separate items. At most 5.
+- title: in the language the requester wrote in, at most 80 characters. On a person's board: a short concrete action that starts with a verb. On a meeting board: the topic to discuss, phrased so it is clear in the meeting a week later.
+- context: one to four plain sentences. For a task: what to deliver, for whom or why, any constraint or reference mentioned. For a meeting topic: what needs discussing or deciding and why it came up. Same language as the title. Warm and direct, no jargon, no buzzwords, no em dashes, no "it's not X, it's Y" phrasing.
+- deadline: only when a date or day is actually said for this item, in the request or the conversation. Resolve relative words ("Friday", "tomorrow", "next week", "vrijdag", "eind deze maand") using the calendar and the date of the message where they were said, not today's date. A period without a day ("next week", "eind deze maand") means the last working day (Mon-Fri) of that period. Return YYYY-MM-DD. deadline_quote = the exact words that state it, copied character for character. If no deadline is said, return empty strings for both. "asap" or "soon" is not a date.
+- project: one of that board's project options, only when the channel name or the conversation makes it clear; otherwise empty string.
+- responsible: only for meeting boards, the first name of the team member the conversation names as picking this up; otherwise empty string.
+- urls: links that literally appear in the conversation and that matter for this item. Copy them exactly. Otherwise an empty list.
+- problem: empty string, unless it is a task request you cannot turn into an item (for example nothing concrete to put on a board). Then one short plain sentence saying what is missing.`;
 
-function distilTool(boards: TaskBoard[], projects: string[]): any {
+function distilTool(boards: TaskBoard[], projects: Record<string, string[]>): any {
+  const allProjects = Array.from(new Set(Object.values(projects).flat()));
   return {
     name: "submit_tasks",
-    description: "Return the tasks distilled from the conversation.",
+    description: "Return the items distilled from the conversation.",
     input_schema: {
       type: "object",
       properties: {
@@ -261,15 +275,16 @@ function distilTool(boards: TaskBoard[], projects: string[]): any {
           items: {
             type: "object",
             properties: {
-              assignee: { type: "string", enum: [...boards.map((b) => b.key), "unknown"] },
+              board: { type: "string", enum: [...boards.map((b) => b.key), "unknown"] },
               title: { type: "string" },
               context: { type: "string" },
               deadline: { type: "string", description: "YYYY-MM-DD, or empty" },
               deadline_quote: { type: "string", description: "Exact words that state the deadline, or empty" },
-              project: projects.length ? { type: "string", enum: [...projects, ""] } : { type: "string" },
+              project: allProjects.length ? { type: "string", enum: [...allProjects, ""] } : { type: "string" },
+              responsible: { type: "string", enum: [...TEAM.map((m) => m.name), ""] },
               urls: { type: "array", items: { type: "string" } },
             },
-            required: ["assignee", "title", "context", "deadline", "deadline_quote", "project", "urls"],
+            required: ["board", "title", "context", "deadline", "deadline_quote", "project", "responsible", "urls"],
           },
         },
       },
@@ -278,16 +293,28 @@ function distilTool(boards: TaskBoard[], projects: string[]): any {
   };
 }
 
-async function distil(deps: TaskDeps, args: { g: Gathered; request: string; requesterName: string; today: string; projects: string[] }): Promise<any> {
-  const boardsList = BOARDS.map((b) => `- ${b.key}: ${b.name}${b.aliases.length ? ` (also: ${b.aliases.join(", ")})` : ""}`).join("\n");
+async function distil(
+  deps: TaskDeps,
+  args: { g: Gathered; requesterName: string; today: string; boards: TaskBoard[]; projects: Record<string, string[]> }
+): Promise<any> {
+  const boardsList = args.boards
+    .map((b) => {
+      const extra = [
+        b.aliases.length ? `also called: ${b.aliases.join(", ")}` : "",
+        b.fields.project ? `projects: ${(args.projects[b.key] || []).join(" | ") || "(none)"}` : "no project column",
+        b.fields.deadline ? "" : "no deadline column",
+      ].filter(Boolean);
+      return `- ${b.key}: ${b.label}. ${b.description} (${extra.join("; ")})`;
+    })
+    .join("\n");
   const user = [
     `Requested by: ${args.requesterName}, in ${args.g.channelName}, today ${args.today} (Europe/Brussels).`,
-    `Request: "${args.request}"`,
+    `Request: "${args.g.request}"`,
     "",
-    "Boards (assignee keys):",
+    "Boards this person can use (board keys):",
     boardsList,
     "",
-    `Project options: ${args.projects.length ? args.projects.join(" | ") : "(none)"}`,
+    `Team (for "responsible"): ${TEAM.map((m) => m.name).join(", ")}`,
     "",
     "Calendar (Europe/Brussels, ISO weeks):",
     calendarLines(args.today),
@@ -301,7 +328,7 @@ async function distil(deps: TaskDeps, args: { g: Gathered; request: string; requ
       model: deps.model,
       max_tokens: 2500,
       system: DISTIL_SYSTEM,
-      tools: [distilTool(BOARDS, args.projects)],
+      tools: [distilTool(args.boards, args.projects)],
       tool_choice: { type: "tool", name: "submit_tasks" },
       messages: [{ role: "user", content: user }],
     } as any,
@@ -365,31 +392,33 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
 
   const today = todayBrussels();
   const requester = await person(client, ev.user);
-  const projects = await allProjectOptions();
+  const boards = boardsFor(requester.email, BOARDS);
+  const projects = await projectOptionsByBoard(boards);
+
   let raw: any;
   try {
-    raw = await distil(deps, { g, request: g.request, requesterName: requester.name, today, projects });
+    raw = await distil(deps, { g, requesterName: requester.name, today, boards, projects });
   } catch (e: any) {
-    const msg = `I couldn't distil a task just now (${e?.message || e}). Try again in a minute.`;
+    const msg = `I couldn't distil this just now (${e?.message || e}). Try again in a minute.`;
     await say(msg);
     return { kind: "handled", summary: msg };
   }
   if (!raw) {
-    await say("I couldn't distil a task from this. Try again with a little more detail.");
-    return { kind: "handled", summary: "No task distilled." };
+    await say("I couldn't distil anything from this. Try again with a little more detail.");
+    return { kind: "handled", summary: "Nothing distilled." };
   }
 
-  const result = validateDistilled(raw, { boards: BOARDS, projectOptions: projects, sourceText: g.sourceText, today });
+  const result = validateDistilled(raw, { boards, projectOptions: projects, team: TEAM, sourceText: g.sourceText, today });
   if (!result.isTaskRequest) {
     // A question about tasks: hand the placeholder back to Pidgi's normal brain.
     return { kind: "not_task", ack };
   }
 
-  const names = BOARDS.length > 1 ? `${BOARDS.slice(0, -1).map((b) => b.name).join(", ")} and ${BOARDS[BOARDS.length - 1].name}` : BOARDS[0]?.name || "nobody";
+  const available = listNames(boards.map(boardRef));
   if (!result.tasks.length) {
-    const msg = result.unknownAssignee
-      ? `I have boards for ${names} so far. Who should this go to?`
-      : result.problem || "I couldn't find a concrete task in this conversation. Tell me what needs doing and for whom.";
+    const msg = result.unknownBoard
+      ? `I can add things to ${available} so far. Which one should this go to?`
+      : result.problem || "I couldn't find a concrete item in this conversation. Tell me what needs doing or discussing, and where it should go.";
     await say(msg);
     return { kind: "handled", summary: msg };
   }
@@ -404,18 +433,23 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
       u: t.urls,
       s: g.sourceLink,
       q: ev.user,
-      a: t.assignee,
+      a: t.board,
       d: t.deadline,
       dq: t.deadlineQuote,
       p: t.project,
+      r: t.responsible,
     };
     const notes = [...(result.notes[i] || [])];
-    if (i === result.tasks.length - 1 && result.unknownAssignee) notes.push(`I skipped a task for someone without a board (I have boards for ${names}).`);
-    const blocks = draftBlocks(d, { boards: BOARDS, projectOptions: await projectOptions(boardOf(BOARDS, d.a)), notes });
-    await say(draftFallbackText(d, BOARDS), blocks);
-    titles.push(`"${t.title}" for ${boardOf(BOARDS, t.assignee)?.name}`);
+    if (i === result.tasks.length - 1 && result.unknownBoard) notes.push(`I skipped an item for a board I don't have (I can use ${available}).`);
+    const blocks = draftBlocks(d, { boards, projectOptions: projects[d.a] || [], team: TEAM, notes });
+    await say(draftFallbackText(d, boards), blocks);
+    const b = boardOf(boards, t.board);
+    titles.push(`"${t.title}" for ${b ? boardRef(b) : t.board}`);
   }
-  return { kind: "handled", summary: `I drafted ${titles.length === 1 ? "a task" : `${titles.length} tasks`}: ${titles.join("; ")}. Nothing is on the board until someone clicks ✅ Add to board.` };
+  return {
+    kind: "handled",
+    summary: `I drafted ${titles.length === 1 ? "one item" : `${titles.length} items`}: ${titles.join("; ")}. Nothing is on a board until someone clicks ✅ Add to board.`,
+  };
 }
 
 // ── 4. Buttons, pickers and the edit modal ──────────────────────────────────
@@ -435,11 +469,35 @@ async function ephemeral(client: any, body: any, text: string) {
   }
 }
 
+function where(body: any): { channel: string; ts: string } {
+  return {
+    channel: body?.channel?.id || body?.container?.channel_id,
+    ts: body?.message?.ts || body?.container?.message_ts,
+  };
+}
+
+/** Redraw a card for a draft, with the boards its requester may use. */
+async function redraw(client: any, at: { channel: string; ts: string }, d: DraftPayload): Promise<void> {
+  const requester = await person(client, d.q);
+  const boards = boardsFor(requester.email, BOARDS);
+  if (!boardOf(boards, d.a) && boards.length) d.a = boards[0].key;
+  const board = boardOf(boards, d.a);
+  const options = await projectOptions(board);
+  if (d.p && !options.includes(d.p)) d.p = null;
+  if (board?.kind !== "meeting") d.r = null;
+  await client.chat.update({
+    channel: at.channel,
+    ts: at.ts,
+    text: draftFallbackText(d, boards),
+    blocks: draftBlocks(d, { boards, projectOptions: options, team: TEAM }),
+  });
+}
+
 export function registerTaskActions(app: any, deps: TaskDeps): void {
   // A picker changed: fold the new value into the draft that travels in the buttons and
-  // redraw the card (the header follows the board, the project list follows the board).
+  // redraw the card (the header, the project list and the person picker follow the board).
   // This way "Add to board" never depends on Slack sending the picker state along.
-  app.action(new RegExp(`^(${A.owner}|${A.deadline}|${A.project})$`), async ({ ack, body, action, client }: any) => {
+  app.action(new RegExp(`^(${A.owner}|${A.deadline}|${A.project}|${A.responsible})$`), async ({ ack, body, action, client }: any) => {
     await ack();
     try {
       const buttons = (body?.message?.blocks || []).find((b: any) => b.block_id === "p9task_buttons");
@@ -449,15 +507,7 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
         [action.action_id]: action.type === "datepicker" ? { selected_date: action.selected_date } : { selected_option: action.selected_option },
       };
       const d = applyFieldState(draft, { ...readFieldState(body?.state?.values), ...readFieldState({ picked }) });
-      const board = boardOf(BOARDS, d.a);
-      const options = await projectOptions(board);
-      if (d.p && options.length && !options.includes(d.p)) d.p = null;
-      await client.chat.update({
-        channel: body?.channel?.id || body?.container?.channel_id,
-        ts: body?.message?.ts || body?.container?.message_ts,
-        text: draftFallbackText(d, BOARDS),
-        blocks: draftBlocks(d, { boards: BOARDS, projectOptions: options }),
-      });
+      await redraw(client, where(body), d);
     } catch (e: any) {
       console.warn("[tasks] could not redraw the card after a picker change:", slackError(e));
     }
@@ -465,13 +515,12 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
 
   app.action(A.create, async ({ ack, body, action, client }: any) => {
     await ack();
-    const channel = body?.channel?.id || body?.container?.channel_id;
-    const ts = body?.message?.ts || body?.container?.message_ts;
+    const { channel, ts } = where(body);
     const userId = body?.user?.id;
     const draft = decodeDraft(action?.value);
     if (!draft) return ephemeral(client, body, "This draft is damaged. Tag me again to make a new one.");
     if (!deps.canConfirm(userId, draft.q)) {
-      return ephemeral(client, body, `Only <@${draft.q}>, who asked for this task, or Niels and Jonas can add it.`);
+      return ephemeral(client, body, `Only <@${draft.q}>, who asked for this, can add it (or someone on Pidgi's write list).`);
     }
     const key = `${channel}:${ts}`;
     if (inFlight.has(key)) return;
@@ -479,51 +528,66 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
     try {
       const d = applyFieldState(draft, readFieldState(body?.state?.values));
       const board = boardOf(BOARDS, d.a);
-      if (!board) return ephemeral(client, body, "Pick whose board this goes to first.");
+      if (!board) return ephemeral(client, body, "Pick which board this goes to first.");
+      const clicker = await person(client, userId);
+      if (!canUseBoard(board, clicker.email)) {
+        return ephemeral(client, body, `${boardRef(board).replace(/^t/, "T")} is private, so I can't add this for you. Pick another board.`);
+      }
 
       const notes: string[] = [];
-      let project = d.p;
+      let project = board.fields.project ? d.p : null;
       if (project) {
         const options = await projectOptions(board);
         if (options.length && !options.includes(project)) {
-          notes.push(`“${project}” isn't a project on ${board.name}'s board, so I left Project empty.`);
+          notes.push(`“${project}” isn't a project on ${boardRef(board)}, so I left Project empty.`);
           project = null;
         }
       }
 
       const requester = await person(client, d.q);
-      const ownerEmail = board.ownerMeans === "assignee" ? board.email.toLowerCase() : requester.email;
-      const ownerNotionId = ownerEmail ? PEOPLE[ownerEmail] || null : null;
-      const ownerName = board.ownerMeans === "assignee" ? board.name : requester.name;
-      if (!ownerNotionId) notes.push(`I couldn't match ${ownerName} to a Notion user, so Owner is empty.`);
+      const people: string[] = [];
+      let requesterNotionId: string | null = null;
+      if (board.fields.requester) {
+        requesterNotionId = notionIdFor(TEAM, requester.email);
+        if (requesterNotionId) people.push(`${board.fields.requester}: ${requester.name}`);
+        else notes.push(`I couldn't match ${requester.name} to a Notion user, so ${board.fields.requester} is empty.`);
+      }
+      let assigneeNotionId: string | null = null;
+      if (board.fields.assignee) {
+        const email = board.kind === "person" ? board.email || null : d.r || null;
+        assigneeNotionId = notionIdFor(TEAM, email);
+        const who = TEAM.find((m) => m.email === email);
+        if (assigneeNotionId && who) people.push(`${board.fields.assignee}: ${who.name}`);
+      }
 
       const page: any = await notionClient().pages.create({
         parent: { database_id: board.databaseId },
         properties: notionProperties(board, {
           title: d.t,
           context: d.c,
-          deadline: d.d,
+          deadline: board.fields.deadline ? d.d : null,
           project,
           urls: d.u,
           source: d.s,
-          ownerNotionId,
+          requesterNotionId,
+          assigneeNotionId,
         }),
-        children: notionChildren({ requesterName: requester.name, today: todayBrussels(), source: d.s, deadlineQuote: d.dq }),
+        children: notionChildren(board, { context: d.c, urls: d.u, requesterName: requester.name, today: todayBrussels(), source: d.s, deadlineQuote: d.dq }),
       } as any);
 
       await client.chat.update({
         channel,
         ts,
-        text: `Added to ${board.name}'s board: ${d.t}`,
+        text: `Added to ${boardRef(board)}: ${d.t}`,
         blocks: doneBlocks({
-          boardName: board.name,
+          boardLabel: boardRef(board),
           boardUrl: board.boardUrl,
           title: d.t,
           pageUrl: page?.url || board.boardUrl,
           byUserId: userId,
-          deadline: d.d,
+          deadline: board.fields.deadline ? d.d : null,
           project,
-          owner: ownerNotionId ? ownerName : null,
+          people,
           notes,
         }),
       });
@@ -544,11 +608,11 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
     const draft = decodeDraft(action?.value);
     if (!draft) return ephemeral(client, body, "This draft is damaged. Tag me again to make a new one.");
     if (!deps.canConfirm(body?.user?.id, draft.q)) {
-      return ephemeral(client, body, `Only <@${draft.q}>, who asked for this task, or Niels and Jonas can edit it.`);
+      return ephemeral(client, body, `Only <@${draft.q}>, who asked for this, can edit it (or someone on Pidgi's write list).`);
     }
     // Keep whatever was picked so far, so saving the text doesn't reset the pickers.
     const d = applyFieldState(draft, readFieldState(body?.state?.values));
-    const meta = JSON.stringify({ c: body?.channel?.id || body?.container?.channel_id, ts: body?.message?.ts || body?.container?.message_ts, d });
+    const meta = JSON.stringify({ ...where(body), d });
     try {
       await client.views.open({ trigger_id: body.trigger_id, view: editModal(d, meta.slice(0, 3000)) });
     } catch (e: any) {
@@ -559,18 +623,17 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
   app.view(A.editSubmit, async ({ ack, view, client }: any) => {
     const title = houseStyle(String(view?.state?.values?.p9t_title?.v?.value || "")).slice(0, 150);
     if (!title) {
-      await ack({ response_action: "errors", errors: { p9t_title: "A task needs a title." } });
+      await ack({ response_action: "errors", errors: { p9t_title: "It needs a title." } });
       return;
     }
     await ack();
     try {
       const meta = JSON.parse(view.private_metadata || "{}");
       const d: DraftPayload | null = decodeDraft(JSON.stringify(meta.d));
-      if (!d || !meta.c || !meta.ts) return;
+      if (!d || !meta.channel || !meta.ts) return;
       d.t = title;
       d.c = houseStyle(String(view?.state?.values?.p9t_ctx?.v?.value || "")).slice(0, 900);
-      const blocks = draftBlocks(d, { boards: BOARDS, projectOptions: await projectOptions(boardOf(BOARDS, d.a)) });
-      await client.chat.update({ channel: meta.c, ts: meta.ts, text: draftFallbackText(d, BOARDS), blocks });
+      await redraw(client, { channel: meta.channel, ts: meta.ts }, d);
     } catch (e: any) {
       console.error("[tasks] saving the edit failed:", slackError(e));
     }
@@ -586,16 +649,11 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
     }
     const userId = body?.user?.id;
     if (requester && !deps.canConfirm(userId, requester)) {
-      return ephemeral(client, body, `Only <@${requester}>, who asked for this task, or Niels and Jonas can discard it.`);
+      return ephemeral(client, body, `Only <@${requester}>, who asked for this, can discard it (or someone on Pidgi's write list).`);
     }
     const title = String(body?.message?.blocks?.[1]?.text?.text || "the draft").split("\n")[0].replace(/^\*|\*$/g, "");
     try {
-      await client.chat.update({
-        channel: body?.channel?.id || body?.container?.channel_id,
-        ts: body?.message?.ts || body?.container?.message_ts,
-        text: "Draft discarded",
-        blocks: discardedBlocks(title, userId),
-      });
+      await client.chat.update({ ...where(body), text: "Draft discarded", blocks: discardedBlocks(title, userId) });
     } catch (e: any) {
       await ephemeral(client, body, `I couldn't discard it (${slackError(e)}).`);
     }

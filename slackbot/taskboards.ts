@@ -4,101 +4,191 @@
  * Nothing in this file talks to Slack, Notion or Anthropic, so it can be unit-tested
  * without booting the bot. The network side lives in tasks.ts.
  *
- * The flow: someone tags Pidgi with "turn this into a task for Laura (by Friday)".
- * Pidgi reads the thread (or the messages above), distils one or more concrete tasks,
- * and posts each as a draft card with an owner picker, a deadline picker and a project
- * picker. Only when someone clicks "Add to board" is the row written to that person's
- * Notion board.
+ * The flow: someone tags Pidgi with "turn this into a task for Laura (by Friday)" or
+ * "put this on the Touchdown agenda". Pidgi reads the thread (or the messages above),
+ * distils one or more items, and posts each as a draft card with pickers. Only when
+ * someone clicks "Add to board" is the row written to the Notion board.
+ *
+ * Two kinds of board:
+ *   - person boards (Laura's, Sankhya's): that person's own work backlog
+ *   - meeting boards (Touchdown, the team sync): topics for a recurring meeting
  */
+
+// ── Team ────────────────────────────────────────────────────────────────────
+
+export interface TeamMember {
+  name: string;
+  email: string;
+  notionId: string;
+}
+
+/** Peak Nine people Pidgi can name as Owner / Creator / Assignee in Notion. */
+export const DEFAULT_TEAM: TeamMember[] = [
+  { name: "Niels", email: "niels@peaknine.studio", notionId: "2d1d872b-594c-8145-ac7e-00025e996fbe" },
+  { name: "Jonas", email: "jonas@peaknine.studio", notionId: "274d872b-594c-81ae-9cba-0002e52cea03" },
+  { name: "Laura", email: "laura@peaknine.studio", notionId: "380d872b-594c-81ad-9c03-000226cbb638" },
+  { name: "Sankhya", email: "sankhya@peaknine.studio", notionId: "380d872b-594c-8109-a350-000220c26f19" },
+  { name: "Bertille", email: "bertille@peaknine.studio", notionId: "277d872b-594c-8168-9159-00022f49c82c" },
+  { name: "Diego", email: "diego@peaknine.studio", notionId: "3d3d872b-594c-81a9-8a00-00028b39f9e9" },
+];
+
+/** The team, plus extra people from TASK_TEAM (JSON array of {name, email, notionId}). */
+export function loadTeam(env: Record<string, string | undefined> = process.env): TeamMember[] {
+  const team = [...DEFAULT_TEAM];
+  if (env.TASK_TEAM) {
+    try {
+      for (const p of JSON.parse(env.TASK_TEAM) || []) {
+        if (!p?.email || !p?.notionId) continue;
+        const email = String(p.email).toLowerCase();
+        const i = team.findIndex((t) => t.email === email);
+        const member = { name: String(p.name || email.split("@")[0]), email, notionId: String(p.notionId) };
+        if (i >= 0) team[i] = member;
+        else team.push(member);
+      }
+    } catch {
+      /* keep the defaults */
+    }
+  }
+  return team;
+}
+
+export function notionIdFor(team: TeamMember[], email: string | null | undefined): string | null {
+  if (!email) return null;
+  return team.find((t) => t.email === String(email).toLowerCase())?.notionId || null;
+}
 
 // ── Boards ──────────────────────────────────────────────────────────────────
 
-export interface BoardProps {
+/** Which Notion property holds what. Leave a field out when the board has no such column. */
+export interface BoardFields {
   title: string;
-  owner: string;
-  deadline: string;
-  status: string;
-  project: string;
-  text: string;
-  resources: string;
+  /** rich_text: the context. Without it, the context goes in the page body. */
+  text?: string;
+  deadline?: string;
+  status?: { prop: string; type: "select" | "status"; value: string };
+  /** select: options are read live from Notion. */
+  project?: string;
+  /** people: the person who asked Pidgi. */
+  requester?: string;
+  /** people: who does it. On a person board that is the board's person; on a meeting board, whoever is named. */
+  assignee?: string;
+  /** rich_text: links. Without it, links go in the page body. */
+  resources?: string;
 }
 
 export interface TaskBoard {
-  /** Stable key used in Slack payloads, e.g. "laura". */
+  /** Stable key used in Slack payloads, e.g. "laura", "touchdown". */
   key: string;
-  /** Display name, e.g. "Laura". */
+  kind: "person" | "meeting";
+  /** Short name: "Laura", "Touchdown". */
   name: string;
-  /** Names the requester may use for this person (lowercase). */
+  /** How the board is called in Slack: "Laura's board", "Touchdown agenda". */
+  label: string;
+  /** One line for the model: what goes on this board. */
+  description: string;
+  /** Words the requester may use for this board (lowercase). */
   aliases: string[];
-  /** The board person's email (used when ownerMeans is "assignee"). */
-  email: string;
+  /** Person boards: that person's email. */
+  email?: string;
   /** Notion DATABASE id (not the data source id). The Pidgi integration must be connected to it. */
   databaseId: string;
-  /** Link to the board page, shown in Slack. */
+  /** Link to the board, shown in Slack. */
   boardUrl: string;
-  /** Property names on that database. */
-  props: BoardProps;
-  /** Status given to a new row. */
-  newStatus: string;
-  /**
-   * What the "Owner" column means on this board. On Laura's board the one filled-in Owner is
-   * Niels (the person who asked for the work), so the default is "requester": Owner = whoever
-   * tagged Pidgi. Switch to "assignee" to put the board person in Owner instead.
-   */
-  ownerMeans: "requester" | "assignee";
+  fields: BoardFields;
+  /** Emails allowed to see and use this board. Absent = the whole team. */
+  restrictedTo?: string[];
+  /** Other Notion pages/databases that only `restrictedTo` may read through Pidgi (the rest of a private meeting page). */
+  privateIds?: string[];
 }
 
-export const DEFAULT_PROPS: BoardProps = {
+/** Laura's and Sankhya's backlogs share these columns. */
+export const PERSON_FIELDS: BoardFields = {
   title: "Title",
-  owner: "Owner",
-  deadline: "Deadline",
-  status: "Status",
-  project: "Project",
   text: "Text",
+  deadline: "Deadline",
+  status: { prop: "Status", type: "select", value: "To Start" },
+  project: "Project",
+  // On Laura's board the one filled-in Owner is Niels, the person who asked for the work.
+  requester: "Owner",
   resources: "Resources",
 };
 
 export const DEFAULT_BOARDS: TaskBoard[] = [
   {
     key: "laura",
+    kind: "person",
     name: "Laura",
+    label: "Laura's board",
+    description: "Laura's own work backlog (she is Peak Nine's designer).",
     aliases: ["laura", "laura lang"],
     email: "laura@peaknine.studio",
     // 🐝 Laura's Magic Work 🪄 → Backlog
     databaseId: "c4f4ed2a82bf467eb290fa670606a2e7",
     boardUrl: "https://www.notion.so/3f8c675ff95881048402cd087d98edda",
-    props: DEFAULT_PROPS,
-    newStatus: "To Start",
-    ownerMeans: "requester",
+    fields: PERSON_FIELDS,
   },
   {
     key: "sankhya",
+    kind: "person",
     name: "Sankhya",
+    label: "Sankhya's board",
+    description: "Sankhya's own work backlog.",
     aliases: ["sankhya", "sankhya gembali"],
     email: "sankhya@peaknine.studio",
     // 🧭 Sankhya's Work Board → Backlog (same columns as Laura's)
     databaseId: "8b8f90869c124b19a093f4f7aa9c53e5",
     boardUrl: "https://www.notion.so/400c675ff95881d7ad53c0d485818fa3",
-    props: DEFAULT_PROPS,
-    newStatus: "To Start",
-    ownerMeans: "requester",
+    fields: PERSON_FIELDS,
+  },
+  {
+    key: "touchdown",
+    kind: "meeting",
+    name: "Touchdown",
+    label: "Touchdown agenda",
+    description: "Agenda of the weekly Touchdown, the one-on-one between Niels and Jonas (the two founders). Topics for the two of them to discuss.",
+    aliases: ["touchdown", "touchdown agenda", "one-on-one", "1:1", "founders meeting"],
+    // 🏈 Touchdown → ✨ Agenda
+    databaseId: "2d5c675ff9588011ac09cd22663b3c68",
+    boardUrl: "https://www.notion.so/2d5c675ff958800f919aea617356cc23",
+    fields: {
+      title: "Task name",
+      text: "Description",
+      deadline: "Due date",
+      status: { prop: "Status", type: "status", value: "Not started" },
+      assignee: "Assignee",
+    },
+    restrictedTo: ["niels@peaknine.studio", "jonas@peaknine.studio"],
+    privateIds: [
+      "2d5c675ff958800f919aea617356cc23", // the Touchdown page
+      "2d5c675ff95880d9a06fe8671241f612", // mental check-in
+      "3bfc675ff9588002817fc58860e39af1", // 🕊️ Projects
+      "356c675ff95880a383acdd35ca853362", // 💤 OLD / Archive
+    ],
+  },
+  {
+    key: "team",
+    kind: "meeting",
+    name: "Team sync",
+    label: "Team sync talking points",
+    description: "Talking points for the internal Peak Nine team meeting (Peak Nine Syncs). Topics for the whole team.",
+    aliases: ["team meeting", "team sync", "internal sync", "sync", "talking points", "teammeeting", "teamoverleg"],
+    // 🚂 Peak Nine Syncs (Internal) → ✏️ Talking Points
+    databaseId: "3f9c675ff95880aeb5fdff8f398a60b4",
+    boardUrl: "https://www.notion.so/31ec675ff958806289ebc0024e2eb2a9",
+    fields: {
+      title: "Task",
+      deadline: "Deadline",
+      status: { prop: ".", type: "status", value: "Not started" },
+      project: "Project",
+      requester: "Creator",
+      assignee: "Assignee",
+    },
   },
 ];
 
-/** Peak Nine email → Notion user id, for the Owner column. Override with TASK_NOTION_PEOPLE (JSON). */
-export const DEFAULT_NOTION_PEOPLE: Record<string, string> = {
-  "niels@peaknine.studio": "2d1d872b-594c-8145-ac7e-00025e996fbe",
-  "jonas@peaknine.studio": "274d872b-594c-81ae-9cba-0002e52cea03",
-  "laura@peaknine.studio": "380d872b-594c-81ad-9c03-000226cbb638",
-  "sankhya@peaknine.studio": "380d872b-594c-8109-a350-000220c26f19",
-  "bertille@peaknine.studio": "277d872b-594c-8168-9159-00022f49c82c",
-  "diego@peaknine.studio": "3d3d872b-594c-81a9-8a00-00028b39f9e9",
-};
-
 /**
- * Boards from TASK_BOARDS (a JSON array) when set, else the defaults. Each entry needs at
- * least key, name and databaseId; everything else falls back to the defaults, so adding a
- * third person is one line of JSON in Render.
+ * Boards from TASK_BOARDS (a JSON array) when set, else the defaults. A minimal entry
+ * ({key, name, email, databaseId}) becomes a person board with Laura's columns.
  */
 export function loadBoards(env: Record<string, string | undefined> = process.env): TaskBoard[] {
   const raw = env.TASK_BOARDS;
@@ -110,16 +200,21 @@ export function loadBoards(env: Record<string, string | undefined> = process.env
     for (const b of list) {
       if (!b?.key || !b?.databaseId) continue;
       const key = String(b.key).toLowerCase();
+      const kind = b.kind === "meeting" ? "meeting" : "person";
+      const name = String(b.name || key);
       out.push({
         key,
-        name: String(b.name || key),
+        kind,
+        name,
+        label: String(b.label || (kind === "person" ? `${name}'s board` : name)),
+        description: String(b.description || (kind === "person" ? `${name}'s own work backlog.` : `Topics for ${name}.`)),
         aliases: Array.isArray(b.aliases) ? b.aliases.map((a: any) => String(a).toLowerCase()) : [key],
-        email: String(b.email || ""),
+        email: b.email ? String(b.email).toLowerCase() : undefined,
         databaseId: normId(String(b.databaseId)),
         boardUrl: String(b.boardUrl || `https://www.notion.so/${normId(String(b.databaseId))}`),
-        props: { ...DEFAULT_PROPS, ...(b.props || {}) },
-        newStatus: String(b.newStatus || "To Start"),
-        ownerMeans: b.ownerMeans === "assignee" ? "assignee" : "requester",
+        fields: b.fields && b.fields.title ? b.fields : PERSON_FIELDS,
+        restrictedTo: Array.isArray(b.restrictedTo) ? b.restrictedTo.map((e: any) => String(e).toLowerCase()) : undefined,
+        privateIds: Array.isArray(b.privateIds) ? b.privateIds.map((i: any) => normId(String(i))) : undefined,
       });
     }
     return out.length ? out : DEFAULT_BOARDS;
@@ -128,39 +223,51 @@ export function loadBoards(env: Record<string, string | undefined> = process.env
   }
 }
 
-export function loadNotionPeople(env: Record<string, string | undefined> = process.env): Record<string, string> {
-  const out: Record<string, string> = { ...DEFAULT_NOTION_PEOPLE };
-  if (env.TASK_NOTION_PEOPLE) {
-    try {
-      const extra = JSON.parse(env.TASK_NOTION_PEOPLE);
-      for (const [k, v] of Object.entries(extra || {})) out[String(k).toLowerCase()] = String(v);
-    } catch {
-      /* keep defaults */
-    }
-  }
-  return out;
-}
-
 /** Notion ids with or without dashes compare equal. */
 export function normId(id: string): string {
   return String(id || "").replace(/-/g, "").toLowerCase().trim();
 }
 
-/** True when a Notion database id is one of the task boards (used to keep the main loop off them). */
+/** True when a Notion database id is one of the boards (used to keep the main loop off them). */
 export function isTaskBoardDatabase(id: string, boards: TaskBoard[] = loadBoards()): boolean {
   const n = normId(id);
   return !!n && boards.some((b) => normId(b.databaseId) === n);
 }
 
+/** May this person see and use the board? */
+export function canUseBoard(board: TaskBoard, email: string | null | undefined): boolean {
+  if (!board.restrictedTo || !board.restrictedTo.length) return true;
+  return !!email && board.restrictedTo.includes(String(email).toLowerCase());
+}
+
+/** The boards this person may use. */
+export function boardsFor(email: string | null | undefined, boards: TaskBoard[] = loadBoards()): TaskBoard[] {
+  return boards.filter((b) => canUseBoard(b, email));
+}
+
+/** Notion ids this person must not read or change through Pidgi's general Notion tools. */
+export function hiddenNotionIds(email: string | null | undefined, boards: TaskBoard[] = loadBoards()): string[] {
+  const out: string[] = [];
+  for (const b of boards) {
+    if (canUseBoard(b, email)) continue;
+    out.push(normId(b.databaseId), ...(b.privateIds || []).map(normId));
+  }
+  return out;
+}
+
 // ── Trigger ─────────────────────────────────────────────────────────────────
 
 /**
- * Cheap pre-filter: does the message talk about tasks at all? A hit is NOT a decision;
- * the distil step decides whether this is a request to create a task or a question
- * about tasks (which goes to Pidgi's normal planning brain).
+ * Cheap pre-filter: does the message talk about tasks or a meeting board at all? A hit is
+ * NOT a decision; the distil step decides whether this is a request to add something or a
+ * question (which goes to Pidgi's normal planning brain). "agenda" only counts in phrases
+ * like "on the agenda" / "op de agenda", so "what's on my agenda today" stays with the
+ * calendar side of Pidgi.
  */
 export function looksLikeTaskRequest(text: string): boolean {
-  return /(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog)([^a-z]|$)/i.test(String(text || ""));
+  const t = String(text || "");
+  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|touchdown|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
+  return /(^|[^a-z])(on|onto|to|op|for|voor|naar)\s+(the\s+|de\s+|het\s+|our\s+|onze\s+)?(?!my\s|mijn\s)([a-z-]+\s+)?agenda([^a-z]|$)/i.test(t);
 }
 
 // ── Dates (Europe/Brussels) ─────────────────────────────────────────────────
@@ -330,23 +437,25 @@ export function houseStyle(s: string): string {
 // ── Model output → checked drafts ───────────────────────────────────────────
 
 export interface DraftTask {
-  assignee: string;
+  board: string;
   title: string;
   context: string;
   deadline: string | null;
   deadlineQuote: string | null;
   project: string | null;
   urls: string[];
+  /** Email of the person named as responsible (meeting boards). */
+  responsible: string | null;
 }
 
 export interface Distilled {
   isTaskRequest: boolean;
   tasks: DraftTask[];
   problem: string | null;
-  /** Things the code changed or dropped, shown to the person on the card. */
+  /** Things the code changed or dropped, per task, shown on the card. */
   notes: string[][];
-  /** Names the requester used that have no board. */
-  unknownAssignee: boolean;
+  /** The requester named a board or person this requester has no board for. */
+  unknownBoard: boolean;
 }
 
 function squash(s: string): string {
@@ -360,53 +469,59 @@ function squash(s: string): string {
 /**
  * Check what the model returned against the source. Nothing the model says is trusted
  * on its own: a deadline must come with words that really appear in the conversation,
- * a link must really appear in the conversation, a project must be an existing option.
+ * a link must really appear in the conversation, a project must be an option on that
+ * board, a responsible person must be on the team, and the board must be one the
+ * requester may use.
  */
 export function validateDistilled(
   raw: any,
-  opts: { boards: TaskBoard[]; projectOptions: string[]; sourceText: string; today: string }
+  opts: { boards: TaskBoard[]; projectOptions: Record<string, string[]>; team: TeamMember[]; sourceText: string; today: string }
 ): Distilled {
   const source = squash(opts.sourceText);
   const sourceUrls = new Set(extractUrls(opts.sourceText));
-  const keys = new Set(opts.boards.map((b) => b.key));
   const out: Distilled = {
     isTaskRequest: !!raw?.is_task_request,
     tasks: [],
     problem: raw?.problem ? houseStyle(String(raw.problem)).slice(0, 500) || null : null,
     notes: [],
-    unknownAssignee: false,
+    unknownBoard: false,
   };
   const list = Array.isArray(raw?.tasks) ? raw.tasks.slice(0, 5) : [];
   for (const t of list) {
     const notes: string[] = [];
-    const assignee = String(t?.assignee || "").toLowerCase();
-    if (!keys.has(assignee)) {
-      out.unknownAssignee = true;
+    const board = opts.boards.find((b) => b.key === String(t?.board || "").toLowerCase());
+    if (!board) {
+      out.unknownBoard = true;
       continue;
     }
     const title = houseStyle(String(t?.title || "")).slice(0, 150);
     if (!title) continue;
     const context = houseStyle(String(t?.context || "")).slice(0, 900);
 
-    let deadline: string | null = isIsoDate(t?.deadline) ? t.deadline : null;
+    let deadline: string | null = board.fields.deadline && isIsoDate(t?.deadline) ? t.deadline : null;
     let deadlineQuote: string | null = t?.deadline_quote ? String(t.deadline_quote).trim().slice(0, 80) : null;
     if (deadline && (!deadlineQuote || !source.includes(squash(deadlineQuote)))) {
       notes.push("I left the deadline empty because I couldn't point to where it was said.");
       deadline = null;
-      deadlineQuote = null;
     }
     if (!deadline) deadlineQuote = null;
     if (deadline && deadline < opts.today) notes.push(`The deadline I found (${prettyDate(deadline)}) is already in the past.`);
 
-    let project: string | null = t?.project ? String(t.project) : null;
-    if (project && !opts.projectOptions.includes(project)) project = null;
+    let project: string | null = board.fields.project && t?.project ? String(t.project) : null;
+    if (project && !(opts.projectOptions[board.key] || []).includes(project)) project = null;
 
     const urls = (Array.isArray(t?.urls) ? t.urls : [])
       .map((u: any) => String(u).replace(/[.,;:!?]+$/, ""))
       .filter((u: string) => sourceUrls.has(u))
       .slice(0, 4);
 
-    out.tasks.push({ assignee, title, context, deadline, deadlineQuote, project, urls });
+    let responsible: string | null = null;
+    if (board.kind === "meeting" && board.fields.assignee && t?.responsible) {
+      const who = String(t.responsible).toLowerCase().trim();
+      responsible = opts.team.find((m) => m.name.toLowerCase() === who || m.email === who)?.email || null;
+    }
+
+    out.tasks.push({ board: board.key, title, context, deadline, deadlineQuote, project, urls, responsible });
     out.notes.push(notes);
   }
   return out;
@@ -426,7 +541,7 @@ export interface DraftPayload {
   s: string | null;
   /** requester Slack user id */
   q: string;
-  /** assignee board key */
+  /** board key */
   a: string;
   /** deadline YYYY-MM-DD */
   d: string | null;
@@ -434,6 +549,8 @@ export interface DraftPayload {
   dq: string | null;
   /** project option */
   p: string | null;
+  /** responsible person's email (meeting boards) */
+  r?: string | null;
 }
 
 /** Slack caps a button value at 2000 characters; trim the context, then the links, to fit. */
@@ -470,6 +587,7 @@ export function decodeDraft(value: string | undefined): DraftPayload | null {
       d: isIsoDate(d.d) ? d.d : null,
       dq: typeof d.dq === "string" ? d.dq : null,
       p: typeof d.p === "string" && d.p ? d.p : null,
+      r: typeof d.r === "string" && d.r ? d.r : null,
     };
   } catch {
     return null;
@@ -482,13 +600,14 @@ export const A = {
   owner: "p9task_owner",
   deadline: "p9task_deadline",
   project: "p9task_project",
+  responsible: "p9task_resp",
   create: "p9task_create",
   edit: "p9task_edit",
   discard: "p9task_discard",
   editSubmit: "p9task_edit_submit",
 } as const;
 
-const NO_PROJECT = "__none__";
+const NONE = "__none__";
 
 function opt(text: string, value: string) {
   return { text: { type: "plain_text", text: text.slice(0, 75), emoji: true }, value: value.slice(0, 150) };
@@ -512,23 +631,29 @@ export function boardOf(boards: TaskBoard[], key: string): TaskBoard | undefined
   return boards.find((b) => b.key === key);
 }
 
-/** The draft card: what Pidgi understood, three pickers, and the buttons. */
+/** How to name a board in a sentence: "Laura's board", "the Touchdown agenda". */
+export function boardRef(b: TaskBoard): string {
+  return b.kind === "person" ? b.label : `the ${b.label}`;
+}
+
+function cardHeader(board: TaskBoard | undefined, key: string): string {
+  if (!board) return `📝 *Draft for ${esc(key)}*`;
+  return board.kind === "person" ? `📝 *Draft task for ${esc(board.name)}*` : `📝 *Draft for the ${esc(board.label)}*`;
+}
+
+/**
+ * The draft card: what Pidgi understood, the pickers, and the buttons.
+ * `boards` are the boards the requester may use; only those show up in the picker.
+ */
 export function draftBlocks(
   d: DraftPayload,
-  opts: { boards: TaskBoard[]; projectOptions: string[]; notes?: string[] }
+  opts: { boards: TaskBoard[]; projectOptions: string[]; team?: TeamMember[]; notes?: string[] }
 ): any[] {
   const board = boardOf(opts.boards, d.a);
-  const who = board?.name || d.a;
   const value = encodeDraft(d);
   const blocks: any[] = [
-    {
-      type: "section",
-      text: { type: "mrkdwn", text: `📝 *Draft task for ${esc(who)}*  ·  _not on the board yet_` },
-    },
-    {
-      type: "section",
-      text: { type: "mrkdwn", text: `*${esc(d.t)}*${d.c ? `\n${esc(d.c)}` : ""}`.slice(0, 2990) },
-    },
+    { type: "section", text: { type: "mrkdwn", text: `${cardHeader(board, d.a)}  ·  _not on the board yet_` } },
+    { type: "section", text: { type: "mrkdwn", text: `*${esc(d.t)}*${d.c ? `\n${esc(d.c)}` : ""}`.slice(0, 2990) } },
   ];
   const links = [...d.u.map((u) => `<${u}|${esc(linkLabel(u))}>`), ...(d.s ? [`<${d.s}|Slack thread>`] : [])];
   if (links.length) {
@@ -539,19 +664,21 @@ export function draftBlocks(
     {
       type: "static_select",
       action_id: A.owner,
-      placeholder: { type: "plain_text", text: "Whose board?" },
-      options: opts.boards.map((b) => opt(`${b.name}'s board`, b.key)),
-      ...(board ? { initial_option: opt(`${board.name}'s board`, board.key) } : {}),
+      placeholder: { type: "plain_text", text: "Which board?" },
+      options: opts.boards.map((b) => opt(b.label, b.key)),
+      ...(board ? { initial_option: opt(board.label, board.key) } : {}),
     },
-    {
+  ];
+  if (!board || board.fields.deadline) {
+    fields.push({
       type: "datepicker",
       action_id: A.deadline,
       placeholder: { type: "plain_text", text: "Deadline" },
       ...(d.d ? { initial_date: d.d } : {}),
-    },
-  ];
-  if (opts.projectOptions.length) {
-    const projOpts = [opt("No project", NO_PROJECT), ...opts.projectOptions.slice(0, 99).map((p) => opt(p, p))];
+    });
+  }
+  if (board?.fields.project && opts.projectOptions.length) {
+    const projOpts = [opt("No project", NONE), ...opts.projectOptions.slice(0, 99).map((p) => opt(p, p))];
     fields.push({
       type: "static_select",
       action_id: A.project,
@@ -560,14 +687,28 @@ export function draftBlocks(
       ...(d.p && opts.projectOptions.includes(d.p) ? { initial_option: opt(d.p, d.p) } : {}),
     });
   }
+  const team = opts.team || [];
+  if (board?.kind === "meeting" && board.fields.assignee && team.length) {
+    const who = team.find((m) => m.email === d.r);
+    fields.push({
+      type: "static_select",
+      action_id: A.responsible,
+      placeholder: { type: "plain_text", text: "Who picks it up?" },
+      options: [opt("Nobody yet", NONE), ...team.slice(0, 99).map((m) => opt(m.name, m.email))],
+      ...(who ? { initial_option: opt(who.name, who.email) } : {}),
+    });
+  }
   blocks.push({ type: "actions", block_id: "p9task_fields", elements: fields });
 
   const hints: string[] = [];
-  if (d.d && d.dq) hints.push(`Deadline taken from “${esc(d.dq)}”.`);
-  else if (d.d) hints.push(`Deadline set to ${prettyDate(d.d)}.`);
-  else hints.push("⚠️ No deadline in the conversation. Pick one above, or leave it empty.");
+  if (!board || board.fields.deadline) {
+    if (d.d && d.dq) hints.push(`Deadline taken from “${esc(d.dq)}”.`);
+    else if (d.d) hints.push(`Deadline set to ${prettyDate(d.d)}.`);
+    else if (board?.kind === "meeting") hints.push("No deadline. Pick one above if it needs one.");
+    else hints.push("⚠️ No deadline in the conversation. Pick one above, or leave it empty.");
+  }
   for (const n of opts.notes || []) hints.push(esc(n));
-  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: hints.join("  ").slice(0, 2990) }] });
+  if (hints.length) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: hints.join("  ").slice(0, 2990) }] });
 
   blocks.push({
     type: "actions",
@@ -582,32 +723,34 @@ export function draftBlocks(
 }
 
 export function draftFallbackText(d: DraftPayload, boards: TaskBoard[]): string {
-  return `Draft task for ${boardOf(boards, d.a)?.name || d.a}: ${d.t}`;
+  const b = boardOf(boards, d.a);
+  return `Draft for ${b?.label || d.a}: ${d.t}`;
 }
 
 /** Card after the row was written. */
 export function doneBlocks(args: {
-  boardName: string;
+  /** As used in a sentence, see boardRef. */
+  boardLabel: string;
   boardUrl: string;
   title: string;
   pageUrl: string;
   byUserId: string;
   deadline: string | null;
   project: string | null;
-  owner: string | null;
+  people: string[];
   notes?: string[];
 }): any[] {
   const meta = [
     args.deadline ? `📅 ${prettyDate(args.deadline)}` : "📅 no deadline",
     args.project ? `🗂️ ${esc(args.project)}` : null,
-    args.owner ? `👤 Owner: ${esc(args.owner)}` : null,
+    ...args.people.map((p) => `👤 ${esc(p)}`),
   ].filter(Boolean);
   const blocks: any[] = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `✅ *Added to <${args.boardUrl}|${esc(args.boardName)}'s board>* by <@${args.byUserId}>\n<${args.pageUrl}|${esc(args.title)}>`,
+        text: `✅ *Added to ${esc(args.boardLabel).replace(/^(the )?(.*)$/, (_m, the, rest) => `${the || ""}<${args.boardUrl}|${rest}>`)}* by <@${args.byUserId}>\n<${args.pageUrl}|${esc(args.title)}>`,
       },
     },
     { type: "context", elements: [{ type: "mrkdwn", text: meta.join("  ·  ") }] },
@@ -626,7 +769,7 @@ export function editModal(d: DraftPayload, privateMetadata: string): any {
     type: "modal",
     callback_id: A.editSubmit,
     private_metadata: privateMetadata,
-    title: { type: "plain_text", text: "Edit task" },
+    title: { type: "plain_text", text: "Edit" },
     submit: { type: "plain_text", text: "Save" },
     close: { type: "plain_text", text: "Cancel" },
     blocks: [
@@ -647,15 +790,25 @@ export function editModal(d: DraftPayload, privateMetadata: string): any {
   };
 }
 
+export interface FieldState {
+  owner?: string;
+  deadline?: string | null;
+  project?: string | null;
+  responsible?: string | null;
+}
+
 /** Current picker values in a block_actions payload. A key is absent when that picker isn't in the state. */
-export function readFieldState(stateValues: any): { owner?: string; deadline?: string | null; project?: string | null } {
-  const out: { owner?: string; deadline?: string | null; project?: string | null } = {};
+export function readFieldState(stateValues: any): FieldState {
+  const out: FieldState = {};
   for (const block of Object.values(stateValues || {}) as any[]) {
     for (const [actionId, el] of Object.entries(block || {}) as [string, any][]) {
       if (actionId === A.owner && el?.selected_option?.value) out.owner = el.selected_option.value;
       if (actionId === A.deadline && "selected_date" in (el || {})) out.deadline = isIsoDate(el.selected_date) ? el.selected_date : null;
       if (actionId === A.project && el?.selected_option?.value) {
-        out.project = el.selected_option.value === NO_PROJECT ? null : el.selected_option.value;
+        out.project = el.selected_option.value === NONE ? null : el.selected_option.value;
+      }
+      if (actionId === A.responsible && el?.selected_option?.value) {
+        out.responsible = el.selected_option.value === NONE ? null : el.selected_option.value;
       }
     }
   }
@@ -663,7 +816,7 @@ export function readFieldState(stateValues: any): { owner?: string; deadline?: s
 }
 
 /** Merge the pickers into the draft. */
-export function applyFieldState(d: DraftPayload, f: ReturnType<typeof readFieldState>): DraftPayload {
+export function applyFieldState(d: DraftPayload, f: FieldState): DraftPayload {
   const next: DraftPayload = { ...d, u: [...d.u] };
   if (f.owner !== undefined) next.a = f.owner;
   if (f.deadline !== undefined && f.deadline !== d.d) {
@@ -671,6 +824,7 @@ export function applyFieldState(d: DraftPayload, f: ReturnType<typeof readFieldS
     next.dq = null; // picked by hand now
   }
   if (f.project !== undefined) next.p = f.project;
+  if (f.responsible !== undefined) next.r = f.responsible;
   return next;
 }
 
@@ -680,38 +834,59 @@ function rt(content: string, link?: string): any {
   return { type: "text", text: { content: content.slice(0, 2000), ...(link ? { link: { url: link } } : {}) } };
 }
 
-/** The properties object for a new row (Notion API 2022-06-28). */
+/** The properties object for a new row (Notion API 2022-06-28). Columns the board doesn't have are skipped. */
 export function notionProperties(
   board: TaskBoard,
-  f: { title: string; context: string; deadline: string | null; project: string | null; urls: string[]; source: string | null; ownerNotionId: string | null }
-): any {
-  const p = board.props;
-  const props: any = {
-    [p.title]: { title: [rt(f.title)] },
-    [p.status]: { select: { name: board.newStatus } },
-  };
-  if (f.context) props[p.text] = { rich_text: [rt(f.context)] };
-  const res: any[] = [];
-  f.urls.forEach((u, i) => {
-    if (i > 0) res.push(rt("\n"));
-    res.push(rt(u, u));
-  });
-  if (f.source) {
-    if (res.length) res.push(rt("\n"));
-    res.push(rt("Slack thread", f.source));
+  f: {
+    title: string;
+    context: string;
+    deadline: string | null;
+    project: string | null;
+    urls: string[];
+    source: string | null;
+    requesterNotionId: string | null;
+    assigneeNotionId: string | null;
   }
-  if (res.length) props[p.resources] = { rich_text: res };
-  if (f.deadline) props[p.deadline] = { date: { start: f.deadline } };
-  if (f.project) props[p.project] = { select: { name: f.project } };
-  if (f.ownerNotionId) props[p.owner] = { people: [{ id: f.ownerNotionId }] };
+): any {
+  const p = board.fields;
+  const props: any = { [p.title]: { title: [rt(f.title)] } };
+  if (p.status) props[p.status.prop] = p.status.type === "status" ? { status: { name: p.status.value } } : { select: { name: p.status.value } };
+  if (p.text && f.context) props[p.text] = { rich_text: [rt(f.context)] };
+  if (p.resources) {
+    const res: any[] = [];
+    f.urls.forEach((u, i) => {
+      if (i > 0) res.push(rt("\n"));
+      res.push(rt(u, u));
+    });
+    if (f.source) {
+      if (res.length) res.push(rt("\n"));
+      res.push(rt("Slack thread", f.source));
+    }
+    if (res.length) props[p.resources] = { rich_text: res };
+  }
+  if (p.deadline && f.deadline) props[p.deadline] = { date: { start: f.deadline } };
+  if (p.project && f.project) props[p.project] = { select: { name: f.project } };
+  if (p.requester && f.requesterNotionId) props[p.requester] = { people: [{ id: f.requesterNotionId }] };
+  if (p.assignee && f.assigneeNotionId) props[p.assignee] = { people: [{ id: f.assigneeNotionId }] };
   return props;
 }
 
-/** Body of the new page: where it came from, so the person can always go back to the source. */
-export function notionChildren(f: { requesterName: string; today: string; source: string | null; deadlineQuote: string | null }): any[] {
+/**
+ * Body of the new page: the context and links when the board has no column for them,
+ * and always where it came from, so the person can go back to the source.
+ */
+export function notionChildren(
+  board: TaskBoard,
+  f: { context: string; urls: string[]; requesterName: string; today: string; source: string | null; deadlineQuote: string | null }
+): any[] {
+  const blocks: any[] = [];
+  if (!board.fields.text && f.context) blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: [rt(f.context)] } });
+  if (!board.fields.resources) {
+    for (const u of f.urls) blocks.push({ object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: [rt(u, u)] } });
+  }
   const line: any[] = [rt(`Captured from Slack by Pidgi on ${prettyDate(f.today)}, asked by ${f.requesterName}.`)];
   if (f.source) line.push(rt(" "), rt("Open the Slack thread", f.source));
-  const blocks: any[] = [{ object: "block", type: "paragraph", paragraph: { rich_text: line } }];
+  blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: line } });
   if (f.deadlineQuote) {
     blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: [rt(`Deadline as said in Slack: “${f.deadlineQuote}”`)] } });
   }

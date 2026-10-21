@@ -43,7 +43,7 @@ import { renderShell, gatherDashboardData, gatherFinanceData, dashboardLink } fr
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { saveFormValue, loadFormValue, formsPersistent } from "./formstore.js";
 import { runTaskCapture, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
-import { looksLikeTaskRequest } from "./taskboards.js";
+import { looksLikeTaskRequest, hiddenNotionIds } from "./taskboards.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -119,11 +119,13 @@ databases (only those shared with the bot): search to find the page or database,
 learn its exact property names and block IDs, then create pages, append content, update
 properties (e.g. a status), or edit a block. Always read a page or database before changing
 it, and confirm what you're about to write before doing it.
-Team task boards (Laura's and Sankhya's backlog in Notion): you never add rows to them yourself.
-New tasks go through the task draft flow: the user tags you in a thread with e.g. "turn this into
-a task for Laura by Friday", and you post a draft card with an ✅ Add to board button. If someone
-asks you to add a task in another way, tell them to use that phrasing. Reading those boards and
-updating existing rows (e.g. a status) is fine.
+Team boards in Notion (Laura's and Sankhya's backlogs, the Touchdown agenda of Niels and Jonas,
+the team sync talking points): you never add rows to them yourself. New items go through the draft
+flow: the user tags you in a thread with e.g. "turn this into a task for Laura by Friday" or "put
+this on the Touchdown agenda", and you post a draft card with an ✅ Add to board button. If someone
+asks you to add an item in another way, tell them to use that phrasing. Reading those boards and
+updating existing rows (e.g. a status) is fine. The Touchdown page is private to Niels and Jonas:
+if a tool says a page is private, tell the person plainly and don't look for a way around it.
 
 Formatting for Slack (important):
 - Slack does NOT render Markdown. Use Slack mrkdwn: *single asterisks* for bold (never **double**),
@@ -688,7 +690,9 @@ async function main(): Promise<void> {
       return handleGcalTool(name, input);
     }
     if (name.startsWith("notion_")) {
-      return handleNotionTool(name, input);
+      // Private boards (the Touchdown agenda) stay hidden from everyone outside their circle.
+      const who = await resolveIdentity(slackUserId);
+      return handleNotionTool(name, input, { hiddenIds: hiddenNotionIds(who?.email || "") });
     }
     if (name === "find_slack_channels") {
       try {

@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_BOARDS,
+  DEFAULT_TEAM,
   applyFieldState,
+  boardsFor,
+  hiddenNotionIds,
+  notionChildren,
   calendarLines,
   decodeDraft,
   draftBlocks,
@@ -21,6 +25,11 @@ import {
 } from "../slackbot/taskboards.js";
 
 const PROJECTS = ["Takeda", "KBS Allez Circulez", "Marketing"];
+const PROJECTS_BY_BOARD = { laura: PROJECTS, sankhya: PROJECTS, team: ["KBS", "INTERNAL", "BE YOUTH"] };
+const LAURA = DEFAULT_BOARDS[0];
+const SANKHYA = DEFAULT_BOARDS[1];
+const TOUCHDOWN = DEFAULT_BOARDS.find((b) => b.key === "touchdown")!;
+const TEAMSYNC = DEFAULT_BOARDS.find((b) => b.key === "team")!;
 
 describe("looksLikeTaskRequest", () => {
   it("fires on task words in English and Dutch", () => {
@@ -30,12 +39,24 @@ describe("looksLikeTaskRequest", () => {
       "maak hier een taak van voor Laura",
       "add these as to-dos for sankhya",
       "Task for Laura: poster",
+      "put this on the touchdown agenda",
+      "zet dit op de agenda van de teammeeting",
+      "add it to the team sync",
+      "talking point for the sync please",
+      "zet dit op de agenda",
     ]) {
       expect(looksLikeTaskRequest(t), t).toBe(true);
     }
   });
   it("stays quiet on ordinary planning questions", () => {
-    for (const t of ["how much capacity does Jonas have next week?", "plan 2 days for Laura on Ethias", "multitasking is hard"]) {
+    for (const t of [
+      "how much capacity does Jonas have next week?",
+      "plan 2 days for Laura on Ethias",
+      "multitasking is hard",
+      "what's on my agenda today?",
+      "wat staat er op mijn agenda morgen",
+      "check my agenda for Friday",
+    ]) {
       expect(looksLikeTaskRequest(t), t).toBe(false);
     }
   });
@@ -91,7 +112,7 @@ describe("houseStyle", () => {
 
 describe("validateDistilled", () => {
   const source = "[Mon 19 Oct 10:00] Niels: Laura, can you make the poster by Friday? Brief: https://docs.google.com/doc/abc\n@Pidgi task for Laura";
-  const base = { boards: DEFAULT_BOARDS, projectOptions: PROJECTS, sourceText: source, today: "2026-10-21" };
+  const base = { boards: DEFAULT_BOARDS, projectOptions: PROJECTS_BY_BOARD, team: DEFAULT_TEAM, sourceText: source, today: "2026-10-21" };
 
   it("keeps a deadline only when its words are in the conversation", () => {
     const r = validateDistilled(
@@ -99,8 +120,8 @@ describe("validateDistilled", () => {
         is_task_request: true,
         problem: "",
         tasks: [
-          { assignee: "laura", title: "Design the poster", context: "For the kickoff.", deadline: "2026-10-23", deadline_quote: "by Friday", project: "Marketing", urls: ["https://docs.google.com/doc/abc"] },
-          { assignee: "laura", title: "Print it", context: "", deadline: "2026-10-30", deadline_quote: "end of next week", project: "", urls: ["https://made-up.example.com"] },
+          { board: "laura", title: "Design the poster", context: "For the kickoff.", deadline: "2026-10-23", deadline_quote: "by Friday", project: "Marketing", urls: ["https://docs.google.com/doc/abc"] },
+          { board: "laura", title: "Print it", context: "", deadline: "2026-10-30", deadline_quote: "end of next week", project: "", urls: ["https://made-up.example.com"] },
         ],
       },
       base
@@ -112,12 +133,37 @@ describe("validateDistilled", () => {
   });
   it("drops projects that are not options and flags unknown people", () => {
     const r = validateDistilled(
-      { is_task_request: true, problem: "", tasks: [{ assignee: "unknown", title: "x", context: "", deadline: "", deadline_quote: "", project: "", urls: [] }, { assignee: "sankhya", title: "Research VHSGs", context: "", deadline: "", deadline_quote: "", project: "Invented project", urls: [] }] },
+      { is_task_request: true, problem: "", tasks: [{ board: "unknown", title: "x", context: "", deadline: "", deadline_quote: "", project: "", urls: [] }, { board: "sankhya", title: "Research VHSGs", context: "", deadline: "", deadline_quote: "", project: "Invented project", urls: [] }] },
       base
     );
-    expect(r.unknownAssignee).toBe(true);
+    expect(r.unknownBoard).toBe(true);
     expect(r.tasks).toHaveLength(1);
-    expect(r.tasks[0]).toMatchObject({ assignee: "sankhya", project: null });
+    expect(r.tasks[0]).toMatchObject({ board: "sankhya", project: null });
+  });
+  it("checks projects per board and keeps a named person only on meeting boards", () => {
+    const r = validateDistilled(
+      {
+        is_task_request: true,
+        problem: "",
+        tasks: [
+          { board: "team", title: "Marketing plan for 2027", context: "", deadline: "", deadline_quote: "", project: "INTERNAL", responsible: "Sankhya", urls: [] },
+          { board: "team", title: "Same, wrong project", context: "", deadline: "", deadline_quote: "", project: "Marketing", responsible: "Mystery", urls: [] },
+          { board: "laura", title: "Poster", context: "", deadline: "", deadline_quote: "", project: "", responsible: "Jonas", urls: [] },
+        ],
+      },
+      base
+    );
+    expect(r.tasks[0]).toMatchObject({ project: "INTERNAL", responsible: "sankhya@peaknine.studio" });
+    expect(r.tasks[1]).toMatchObject({ project: null, responsible: null });
+    expect(r.tasks[2]).toMatchObject({ responsible: null });
+  });
+  it("refuses a board the requester may not use", () => {
+    const r = validateDistilled(
+      { is_task_request: true, problem: "", tasks: [{ board: "touchdown", title: "Talk about pay", context: "", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] }] },
+      { ...base, boards: boardsFor("laura@peaknine.studio") }
+    );
+    expect(r.tasks).toHaveLength(0);
+    expect(r.unknownBoard).toBe(true);
   });
   it("passes questions through", () => {
     expect(validateDistilled({ is_task_request: false, problem: "", tasks: [] }, base).isTaskRequest).toBe(false);
@@ -125,7 +171,7 @@ describe("validateDistilled", () => {
 });
 
 function draft(over: Partial<DraftPayload> = {}): DraftPayload {
-  return { v: 1, t: "Design the poster", c: "For the kickoff.", u: ["https://docs.google.com/doc/abc"], s: "https://peak-nine.slack.com/archives/C1/p1789464794876149", q: "UNIELS", a: "laura", d: "2026-10-23", dq: "by Friday", p: "Marketing", ...over };
+  return { v: 1, t: "Design the poster", c: "For the kickoff.", u: ["https://docs.google.com/doc/abc"], s: "https://peak-nine.slack.com/archives/C1/p1789464794876149", q: "UNIELS", a: "laura", d: "2026-10-23", dq: "by Friday", p: "Marketing", r: null, ...over };
 }
 
 describe("draft payload", () => {
@@ -149,6 +195,7 @@ describe("draft card", () => {
     const blocks = draftBlocks(draft(), { boards: DEFAULT_BOARDS, projectOptions: PROJECTS });
     const fields = blocks.find((b) => b.block_id === "p9task_fields");
     expect(fields.elements.map((e: any) => e.action_id)).toEqual(["p9task_owner", "p9task_deadline", "p9task_project"]);
+    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "touchdown", "team"]);
     expect(fields.elements[0].initial_option.value).toBe("laura");
     expect(fields.elements[1].initial_date).toBe("2026-10-23");
     expect(fields.elements[2].initial_option.value).toBe("Marketing");
@@ -166,6 +213,43 @@ describe("draft card", () => {
   });
 });
 
+describe("meeting board cards", () => {
+  it("offers a person picker and no project on the Touchdown agenda", () => {
+    const blocks = draftBlocks(draft({ a: "touchdown", p: null, r: "jonas@peaknine.studio", d: null, dq: null }), {
+      boards: DEFAULT_BOARDS,
+      projectOptions: [],
+      team: DEFAULT_TEAM,
+    });
+    const fields = blocks.find((b) => b.block_id === "p9task_fields");
+    expect(fields.elements.map((e: any) => e.action_id)).toEqual(["p9task_owner", "p9task_deadline", "p9task_resp"]);
+    expect(fields.elements[2].initial_option.value).toBe("jonas@peaknine.studio");
+    expect(JSON.stringify(blocks)).toContain("Draft for the Touchdown agenda");
+    expect(JSON.stringify(blocks)).toContain("No deadline. Pick one above if it needs one.");
+  });
+  it("hides private boards from people outside the circle", () => {
+    const blocks = draftBlocks(draft(), { boards: boardsFor("sankhya@peaknine.studio"), projectOptions: PROJECTS, team: DEFAULT_TEAM });
+    const fields = blocks.find((b) => b.block_id === "p9task_fields");
+    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "team"]);
+  });
+});
+
+describe("access to private boards", () => {
+  it("only Niels and Jonas can use the Touchdown agenda", () => {
+    expect(boardsFor("niels@peaknine.studio").map((b) => b.key)).toContain("touchdown");
+    expect(boardsFor("JONAS@peaknine.studio").map((b) => b.key)).toContain("touchdown");
+    expect(boardsFor("laura@peaknine.studio").map((b) => b.key)).not.toContain("touchdown");
+    expect(boardsFor("").map((b) => b.key)).not.toContain("touchdown");
+  });
+  it("hides the whole Touchdown page from everyone else", () => {
+    expect(hiddenNotionIds("niels@peaknine.studio")).toEqual([]);
+    const hidden = hiddenNotionIds("bertille@peaknine.studio");
+    expect(hidden).toContain("2d5c675ff9588011ac09cd22663b3c68"); // ✨ Agenda
+    expect(hidden).toContain("2d5c675ff958800f919aea617356cc23"); // the page
+    expect(hidden).toContain("2d5c675ff95880d9a06fe8671241f612"); // mental check-in
+    expect(hidden).not.toContain("3f9c675ff95880aeb5fdff8f398a60b4"); // team talking points stay open
+  });
+});
+
 describe("picker state", () => {
   it("reads the pickers and applies them to the draft", () => {
     const state = {
@@ -173,11 +257,12 @@ describe("picker state", () => {
         p9task_owner: { type: "static_select", selected_option: { value: "sankhya" } },
         p9task_deadline: { type: "datepicker", selected_date: "2026-10-30" },
         p9task_project: { type: "static_select", selected_option: { value: "__none__" } },
+        p9task_resp: { type: "static_select", selected_option: { value: "diego@peaknine.studio" } },
       },
     };
     const f = readFieldState(state);
-    expect(f).toEqual({ owner: "sankhya", deadline: "2026-10-30", project: null });
-    expect(applyFieldState(draft(), f)).toMatchObject({ a: "sankhya", d: "2026-10-30", dq: null, p: null });
+    expect(f).toEqual({ owner: "sankhya", deadline: "2026-10-30", project: null, responsible: "diego@peaknine.studio" });
+    expect(applyFieldState(draft(), f)).toMatchObject({ a: "sankhya", d: "2026-10-30", dq: null, p: null, r: "diego@peaknine.studio" });
   });
   it("leaves the draft alone when the pickers were not touched", () => {
     expect(applyFieldState(draft(), readFieldState({}))).toEqual(draft());
@@ -186,14 +271,15 @@ describe("picker state", () => {
 
 describe("Notion row", () => {
   it("matches the board's columns", () => {
-    const props = notionProperties(DEFAULT_BOARDS[0], {
+    const props = notionProperties(LAURA, {
       title: "Design the poster",
       context: "For the kickoff.",
       deadline: "2026-10-23",
       project: "Marketing",
       urls: ["https://docs.google.com/doc/abc"],
       source: "https://peak-nine.slack.com/archives/C1/p1",
-      ownerNotionId: "2d1d872b-594c-8145-ac7e-00025e996fbe",
+      requesterNotionId: "2d1d872b-594c-8145-ac7e-00025e996fbe",
+      assigneeNotionId: "380d872b-594c-81ad-9c03-000226cbb638",
     });
     expect(Object.keys(props).sort()).toEqual(["Deadline", "Owner", "Project", "Resources", "Status", "Text", "Title"]);
     expect(props.Status).toEqual({ select: { name: "To Start" } });
@@ -205,8 +291,45 @@ describe("Notion row", () => {
     ]);
   });
   it("leaves empty fields out", () => {
-    const props = notionProperties(DEFAULT_BOARDS[1], { title: "x", context: "", deadline: null, project: null, urls: [], source: null, ownerNotionId: null });
+    const props = notionProperties(SANKHYA, { title: "x", context: "", deadline: null, project: null, urls: [], source: null, requesterNotionId: null, assigneeNotionId: null });
     expect(Object.keys(props).sort()).toEqual(["Status", "Title"]);
+  });
+  it("fills the Touchdown agenda's own columns, with a real status", () => {
+    const props = notionProperties(TOUCHDOWN, {
+      title: "Pricing for Allez Circulez 2027",
+      context: "Decide the price per team.",
+      deadline: "2026-10-26",
+      project: "Marketing",
+      urls: ["https://docs.google.com/doc/abc"],
+      source: "https://peak-nine.slack.com/archives/C1/p1",
+      requesterNotionId: "2d1d872b-594c-8145-ac7e-00025e996fbe",
+      assigneeNotionId: "274d872b-594c-81ae-9cba-0002e52cea03",
+    });
+    expect(Object.keys(props).sort()).toEqual(["Assignee", "Description", "Due date", "Status", "Task name"]);
+    expect(props.Status).toEqual({ status: { name: "Not started" } });
+    const body = JSON.stringify(notionChildren(TOUCHDOWN, { context: "Decide the price per team.", urls: ["https://docs.google.com/doc/abc"], requesterName: "Niels", today: "2026-10-21", source: null, deadlineQuote: null }));
+    expect(body).toContain("https://docs.google.com/doc/abc"); // no Resources column, so links go in the body
+    expect(body).not.toContain("Decide the price per team."); // context already in Description
+  });
+  it("fills the team talking points' columns", () => {
+    const props = notionProperties(TEAMSYNC, {
+      title: "Marketing plan for 2027",
+      context: "Where do we start?",
+      deadline: null,
+      project: "INTERNAL",
+      urls: [],
+      source: null,
+      requesterNotionId: "380d872b-594c-8109-a350-000220c26f19",
+      assigneeNotionId: null,
+    });
+    expect(props).toEqual({
+      Task: { title: [{ type: "text", text: { content: "Marketing plan for 2027" } }] },
+      ".": { status: { name: "Not started" } },
+      Project: { select: { name: "INTERNAL" } },
+      Creator: { people: [{ id: "380d872b-594c-8109-a350-000220c26f19" }] },
+    });
+    const body = JSON.stringify(notionChildren(TEAMSYNC, { context: "Where do we start?", urls: [], requesterName: "Sankhya", today: "2026-10-21", source: null, deadlineQuote: null }));
+    expect(body).toContain("Where do we start?"); // no text column, so the context goes in the body
   });
 });
 
@@ -214,12 +337,15 @@ describe("board config", () => {
   it("recognises the boards with or without dashes", () => {
     expect(isTaskBoardDatabase("c4f4ed2a-82bf-467e-b290-fa670606a2e7")).toBe(true);
     expect(isTaskBoardDatabase("8b8f90869c124b19a093f4f7aa9c53e5")).toBe(true);
+    expect(isTaskBoardDatabase("2d5c675f-f958-8011-ac09-cd22663b3c68")).toBe(true);
+    expect(isTaskBoardDatabase("3f9c675ff95880aeb5fdff8f398a60b4")).toBe(true);
     expect(isTaskBoardDatabase("4f4662ba-9475-4e85-80a2-23d2572073e3")).toBe(false);
   });
   it("can add a board from TASK_BOARDS", () => {
     const boards = loadBoards({ TASK_BOARDS: JSON.stringify([{ key: "Diego", name: "Diego", databaseId: "aaaa-bbbb" }]) });
     expect(boards).toHaveLength(1);
-    expect(boards[0]).toMatchObject({ key: "diego", databaseId: "aaaabbbb", newStatus: "To Start", ownerMeans: "requester" });
+    expect(boards[0]).toMatchObject({ key: "diego", kind: "person", label: "Diego's board", databaseId: "aaaabbbb" });
+    expect(boards[0].fields.requester).toBe("Owner");
   });
   it("falls back to the defaults on bad JSON", () => {
     expect(loadBoards({ TASK_BOARDS: "{oops" })).toBe(DEFAULT_BOARDS);
