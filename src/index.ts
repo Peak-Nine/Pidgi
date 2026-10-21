@@ -75,13 +75,14 @@ async function main(): Promise<void> {
   registerLoginTools(server);
 
   // Only register API tools if we have a refresh token
+  let client: TeamleaderClient | null = null;
   if (refreshToken) {
     const auth = new TeamleaderAuth({
       clientId,
       clientSecret,
       refreshToken,
     });
-    const client = new TeamleaderClient(auth);
+    client = new TeamleaderClient(auth);
 
     // Register all tools
     registerContactTools(server, client);
@@ -108,14 +109,18 @@ async function main(): Promise<void> {
     registerOrderTools(server, client);
     registerCallTools(server, client);
     registerPlanningTools(server, client);
-
-    // Initialize cache (active user + work types)
-    await initializeCache(client);
   }
 
   // Start server
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Initialize cache (active user + work types) after connecting, in the background.
+  // A slow Teamleader login used to block the handshake and crash the Slack bot on startup;
+  // every reader of this cache already falls back when it is empty.
+  if (client) {
+    initializeCache(client).catch((e) => console.warn("Warning: could not initialize cache", e));
+  }
 
   // Handle graceful shutdown
   process.on("SIGINT", async () => {
