@@ -44,6 +44,9 @@ describe("looksLikeTaskRequest", () => {
       "add it to the team sync",
       "talking point for the sync please",
       "zet dit op de agenda",
+      "add to Laura's board that she could polish our Linkedin Services pages - deadline 30/10",
+      "zet dit op het bord van Sankhya",
+      "put this on Sankhya's board",
     ]) {
       expect(looksLikeTaskRequest(t), t).toBe(true);
     }
@@ -56,6 +59,8 @@ describe("looksLikeTaskRequest", () => {
       "what's on my agenda today?",
       "wat staat er op mijn agenda morgen",
       "check my agenda for Friday",
+      "show me the finance dashboard",
+      "onboarding for the new intern",
     ]) {
       expect(looksLikeTaskRequest(t), t).toBe(false);
     }

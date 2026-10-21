@@ -258,7 +258,7 @@ export function hiddenNotionIds(email: string | null | undefined, boards: TaskBo
 // ── Trigger ─────────────────────────────────────────────────────────────────
 
 /**
- * Cheap pre-filter: does the message talk about tasks or a meeting board at all? A hit is
+ * Cheap pre-filter: does the message talk about tasks, a board or a meeting at all? A hit is
  * NOT a decision; the distil step decides whether this is a request to add something or a
  * question (which goes to Pidgi's normal planning brain). "agenda" only counts in phrases
  * like "on the agenda" / "op de agenda", so "what's on my agenda today" stays with the
@@ -266,7 +266,7 @@ export function hiddenNotionIds(email: string | null | undefined, boards: TaskBo
  */
 export function looksLikeTaskRequest(text: string): boolean {
   const t = String(text || "");
-  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|touchdown|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
+  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|touchdown|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
   return /(^|[^a-z])(on|onto|to|op|for|voor|naar)\s+(the\s+|de\s+|het\s+|our\s+|onze\s+)?(?!my\s|mijn\s)([a-z-]+\s+)?agenda([^a-z]|$)/i.test(t);
 }
 
