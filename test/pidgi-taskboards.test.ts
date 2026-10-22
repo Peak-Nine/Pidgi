@@ -53,6 +53,11 @@ describe("looksLikeTaskRequest", () => {
       "zet dit op het bord van Sankhya",
       "put this on Sankhya's board",
       "zet dit op mijn mothership",
+      "put this on Jonas and Niels' 1:1",
+      "can you add this to the 1-on-1 of Niels and Jonas",
+      "add it to their one on one",
+      "zet dit op de één-op-één van Jonas en Niels",
+      "for the founders' meeting please",
     ]) {
       expect(looksLikeTaskRequest(t), t).toBe(true);
     }
@@ -67,6 +72,8 @@ describe("looksLikeTaskRequest", () => {
       "check my agenda for Friday",
       "show me the finance dashboard",
       "onboarding for the new intern",
+      "schedule a meeting at 11:15",
+      "the ratio is 1:10",
     ]) {
       expect(looksLikeTaskRequest(t), t).toBe(false);
     }

@@ -158,7 +158,20 @@ export const DEFAULT_BOARDS: TaskBoard[] = [
     name: "Touchdown",
     label: "Touchdown agenda",
     description: "Agenda of the weekly Touchdown, the one-on-one between Niels and Jonas (the two founders). Topics for the two of them to discuss.",
-    aliases: ["touchdown", "touchdown agenda", "one-on-one", "1:1", "founders meeting"],
+    aliases: [
+      "touchdown",
+      "touchdown agenda",
+      "one-on-one",
+      "1:1",
+      "1-on-1",
+      "een-op-een",
+      "jonas and niels' 1:1",
+      "niels and jonas' 1:1",
+      "jonas x niels",
+      "the 1:1 of jonas and niels",
+      "founders meeting",
+      "founders' meeting",
+    ],
     // 🏈 Touchdown → ✨ Agenda
     databaseId: "2d5c675ff9588011ac09cd22663b3c68",
     boardUrl: "https://www.notion.so/2d5c675ff958800f919aea617356cc23",
@@ -355,7 +368,7 @@ export function scrubPrivate(text: string, email: string | null | undefined, boa
  */
 export function looksLikeTaskRequest(text: string): boolean {
   const t = String(text || "");
-  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|touchdown|mothership|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
+  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|touchdown|mothership|(?<![0-9])1[:-]1(?![0-9])|1-on-1|one[- ]on[- ]one|(een|één)[- ]op[- ](een|één)|founders'? ?(meeting|overleg)|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
   return /(^|[^a-z])(on|onto|to|op|for|voor|naar)\s+(the\s+|de\s+|het\s+|our\s+|onze\s+)?(?!my\s|mijn\s)([a-z-]+\s+)?agenda([^a-z]|$)/i.test(t);
 }
 

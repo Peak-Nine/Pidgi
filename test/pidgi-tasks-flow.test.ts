@@ -335,6 +335,9 @@ describe("task capture flow", () => {
       "1789000000.000100"
     );
     expect(r).toMatchObject({ kind: "handled", private: true });
+    // The model is told that "Jonas and Niels' 1:1" means Touchdown.
+    expect(claude.seen[0].messages[0].content).toContain("jonas and niels' 1:1");
+    expect(claude.seen[0].system).toContain("Jonas and Niels' 1:1");
     const card = slack.calls.update[0];
     expect(JSON.stringify(card.blocks)).toContain("Budget for a second designer");
 
