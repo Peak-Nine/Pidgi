@@ -132,6 +132,7 @@ Each item shows the buyer, country, deadline, source, a fit score out of 100, tw
 | UNDP procurement notices | Public RSS feed (all regions) | works, verified 7 Oct 2026 |
 | Enabel public procurement | The public "open tenders" list (first 3 pages), then for each shortlisted tender the pages of the tender PDF that decide a bid: cover, award criteria, terms of reference, selection file | works, verified 8 Oct 2026 |
 | World Bank opportunities (projects-operations/opportunities) | Official search API, anonymous, the same feed the opportunities page uses: every consulting "Request for Expression of Interest" that is still open, with the full notice text. Already-judged notices are skipped, so the first run catches up on everything open. Individual-consultant posts (mostly project-unit staff) are left out unless `SCOUT_WORLDBANK_INDIVIDUAL=1`; goods, works and non-consulting tenders are left out | works, verified 8 Oct 2026 |
+| GIZ tenders (ausschreibungen.giz.de) | The public list table (first `SCOUT_GIZ_MAX_PAGES` pages, default 3, newest first), open procedures only. The list gives title, reference, procedure (VgV = above the EU threshold, UVgO = below, TNW = participation competition first) and deadline; scope, budget and documents sit behind a free registration, so GIZ items are scored on the title alone and the digest says so | works, verified 14 Oct 2026 |
 | ReliefWeb jobs (consultancies) | Official API, needs an approved appname | waiting: request one, see below |
 | Belgian e-Procurement (BDA, publicprocurement.be) | Not read. Its search API refuses requests without a login token (403, checked 8 Oct 2026); Scout does not borrow the website's own login to get around that | see below |
 
@@ -140,6 +141,23 @@ Every request goes through `scout/http.ts`: a User-Agent that names Peak Nine an
 **ReliefWeb.** Since 1 November 2025 the ReliefWeb API only answers callers with an approved appname; without one it returns 403 (checked live on 7 Oct 2026). Request one, free, at https://apidoc.reliefweb.int/parameters#appname, then set `RELIEFWEB_APPNAME` on Render. Until then Scout notes "waiting for appname" in every digest and skips the source. It does not try the public website instead.
 
 **Belgian e-Procurement (BDA).** Smaller Belgian tenders, under the European thresholds, are only published there. Two clean ways in, both still to check: ask BOSA's e-Procurement helpdesk whether they give API access for automated reading, or let the BDA send its own e-mail alerts for a saved search to a Slack channel's e-mail address, so Scout can read the alerts from Slack. Above-threshold Belgian tenders already reach Scout through TED.
+
+### The Tender Board in Notion
+
+Scout's digest is a feed; the Tender Board is the memory. It is a Notion database (under the Sales page) with one card per tender and a kanban on its Stage property: Relevant → Considered → Work in progress → Submitted → Won / Lost / Dropped, plus Deadline, Owner, Buyer, Source, Reference, Link, Fit, Why it fits, Playbook, Estimated value, Procedure, Submitted on, Outcome, Lessons learnt, Debrief received, Added by. Views: Board, Deadlines (calendar), "Won, lost and lessons".
+
+How Tendi writes to it, once connected:
+
+- A 👍 on a digest item creates the card in Relevant (Added by = Scout, Fit from the score, the link and the deadline as Scout had them). A 👎 only trains the scorer. A card that already exists is refreshed, never moved backwards.
+- **Start a proposal** moves the card to Work in progress and sets the owner to the person who pressed the button (matched by email). If the card does not exist yet it is created there.
+- `@Tendi add the Oxfam tender to the board`, `move Ipas to submitted, 12 October, 15,000 EUR`, `mark GIZ 10032371 as lost, lesson: price too high`, `owner Jonas`: the `tender_board` tool (writes gated to the allowlist, like Teamleader). Tendi only writes what you said; it does not guess deadlines or values.
+
+Connecting it (five minutes, once):
+
+1. In Notion, open the Tender Board page → ••• → Connections → add the internal integration Pidgi uses (or create one named Tendi at notion.so/profile/integrations, internal, read + insert + update content, and add that).
+2. On Render, Tendi service → Environment: `NOTION_TOKEN` = that integration's secret (same value as on the Pidgi service if you reuse its integration), `NOTION_TENDER_DB` = the board's database id, the 32 characters at the end of its Notion link (`333c5045919840088b81c63d7c566df0` for the board created on 14 Oct 2026). Save; Render redeploys. The start log says "Tender Board (Notion) connected".
+
+Without both variables the tool answers that the board is not connected and Scout skips the board quietly.
 
 ### Switching it on
 
@@ -170,7 +188,7 @@ A laptop run stores its memory in your temp folder unless `TENDI_DATA_DIR` says 
 - What counts as a good fit: `tendi/scout/fit-rubric.md`. Lines marked [assumption] are defaults to confirm, such as the 10-day deadline flag and the missing value range.
 - The keyword lists: `POSITIVE` and `NEGATIVE` in `tendi/scout/filter.ts`. The filter is meant to be generous; its only job is to keep furniture, works and vehicles away from the model.
 - "National consultant" roles (open only to nationals of the country, mostly UNDP) are dropped by default. Set `SCOUT_KEEP_NATIONAL=1` to keep them.
-- TED CPV codes: `SCOUT_TED_CPV` (space separated). UNDP regions: `SCOUT_UNDP_FEEDS` (for example `RAF,RER`).
+- TED CPV codes: `SCOUT_TED_CPV` (space separated). UNDP regions: `SCOUT_UNDP_FEEDS` (for example `RAF,RER`). GIZ list pages per run: `SCOUT_GIZ_MAX_PAGES` (default 3; a run stops earlier once a page is older than the lookback).
 - Enabel tender PDFs are read by a separate helper process (`tendi/scout/pdf-pages.mjs`), one at a time, about 150 MB each, killed after 60 seconds. It reads the table of contents and then only the decisive pages (on the tenders tested, the first six pages were cover, contents and legal boilerplate; turnover and team requirements sat on pages 31 to 35). Before each PDF Scout checks the instance's free memory and skips the PDF when less than 200 MB is free; `/scout/status` shows the memory it sees. Background: on 8 Oct 2026 reading PDFs inside Tendi itself pushed it past Render's 512 MB and both scheduled runs crashed.
 - If a scheduled run crashes the service, Scout retries once that day (two attempts in total), never starts after `SCOUT_LATEST` (default 20:00), and counts the day as done only when a run finished.
 

@@ -21,6 +21,7 @@ import { memoryHeadroomMb } from "./memory.js";
 import { resetBudgets } from "./http.js";
 import { scoreOpportunities } from "./scorer.js";
 import { enabelAdapter, readTenderPdf } from "./sources/enabel.js";
+import { gizAdapter } from "./sources/giz.js";
 import { reliefwebAdapter } from "./sources/reliefweb.js";
 import { tedAdapter } from "./sources/ted.js";
 import { undpAdapter } from "./sources/undp.js";
@@ -28,7 +29,7 @@ import { worldbankAdapter } from "./sources/worldbank.js";
 import { isSeen, markSeen, recentFeedback, recordRun, recordScores, saveState } from "./store.js";
 import type { Opportunity, RunSummary, ScoredOpportunity, SourceAdapter, SourceResult } from "./types.js";
 
-export const ADAPTERS: SourceAdapter[] = [tedAdapter, undpAdapter, worldbankAdapter, reliefwebAdapter, enabelAdapter];
+export const ADAPTERS: SourceAdapter[] = [tedAdapter, undpAdapter, worldbankAdapter, reliefwebAdapter, enabelAdapter, gizAdapter];
 
 export interface RunOptions {
   anthropic: Anthropic;
@@ -61,7 +62,7 @@ export function isoDaysAgo(days: number, now = new Date()): string {
 
 // Small boost for sources that are closest to Peak Nine's work (Enabel is a client;
 // ReliefWeb consultancies are individual assignments). [assumption, tune freely]
-const SOURCE_BOOST: Record<string, number> = { enabel: 2, reliefweb: 1, worldbank: 0, undp: 0, ted: 0 };
+const SOURCE_BOOST: Record<string, number> = { enabel: 2, reliefweb: 1, worldbank: 0, undp: 0, ted: 0, giz: 0 };
 
 /**
  * Priority when the per-run scoring cap bites: more keyword hits first, a small

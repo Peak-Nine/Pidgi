@@ -19,6 +19,9 @@
  *
  * The edits of the last fill are kept on disk so they can be re-applied when the
  * Canva editing session expired before Niels said yes.
+ *
+ * Works with both generations of Canva's editing tools (see "talking to Canva"
+ * below): Tendi's connection had the older set on 8 Oct 2026.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
@@ -33,8 +36,8 @@ export interface CallResult {
   isError: boolean;
   images?: CanvaImage[];
 }
-/** Calls a Canva MCP tool by its raw name ("read-design", "edit-design"). */
-export type CanvaCaller = (tool: "read-design" | "edit-design", input: any) => Promise<CallResult>;
+/** Calls a Canva MCP tool by its raw name ("read-design", "start-editing-transaction"...). */
+export type CanvaCaller = (tool: string, input: any) => Promise<CallResult>;
 
 export interface Box {
   top: number;
@@ -348,8 +351,8 @@ function overlapX(a: Box, b: Box): number {
 }
 
 /** Compare a page after editing with the map: boxes that grew past the page bottom or into what sits below them. */
-export function fitWarnings(before: MapPage, afterPage: any, touched: string[]): string[] {
-  const after = parsePage(afterPage, before.index);
+export function fitWarnings(before: MapPage, afterPage: MapPage | any, touched: string[]): string[] {
+  const after: MapPage = Array.isArray(afterPage?.elements) && afterPage.elements.every((e: any) => typeof e?.key === "string") ? afterPage : parsePage(afterPage, before.index);
   const byLoc = new Map(after.elements.map((e) => [e.locator, e]));
   const warnings: string[] = [];
   const bottomMargin = before.height ? before.height - 30 : Infinity;
@@ -397,7 +400,30 @@ export function rekey(updated: MapPage, before: MapPage): MapPage {
   return { ...updated, elements: updated.elements.map((e) => ({ ...e, key: keyOf.get(e.locator) || `${e.key}n` })) };
 }
 
-// ---- the two tools -------------------------------------------------------
+// ---- talking to Canva: two generations of Canva's editing tools ----------
+//
+// Canva's MCP server does not hand every client the same tools. On 8 Oct 2026
+// Claude's own Canva connector had read-design / edit-design (here "v2"), while
+// Tendi's connection had the older set (here "v1"): start-editing-transaction,
+// perform-editing-operations, commit- and cancel-editing-transaction and
+// get-design-content. The v1 answer shapes below come from Canva's tool docs
+// (canva.dev/docs/mcp/tools, read 8 Oct 2026): richtexts with element_id,
+// page_index, regions [{type, text}] and containerElement {position, dimension};
+// fills with element_id; pages with page_id, page_number, dimension; thumbnails as
+// URLs; edit results with status "success".
+
+export interface CanvaConn {
+  call: (tool: string, input: any) => Promise<CallResult>;
+  has: (tool: string) => boolean;
+  /** Fetch a thumbnail URL as an image (injected in tests). */
+  fetchImage?: (url: string) => Promise<CanvaImage | null>;
+}
+
+/** Old call style (a bare function) means the v2 tools; keeps the tests and callers simple. */
+function toConn(x: CanvaCaller | CanvaConn): CanvaConn {
+  if (typeof x === "function") return { call: x, has: (t) => t === "read-design" || t === "edit-design" };
+  return x;
+}
 
 const PAGES_PER_READ = 6;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -414,55 +440,256 @@ export function withRetry(call: CanvaCaller, waitMs = 20_000): CanvaCaller {
   };
 }
 
-async function readPages(call: CanvaCaller, designId: string, pages: number[] | null, transactionId?: string): Promise<{ map?: DocMap; error?: string }> {
-  // Page count first (cheap), opening the session at the same time when needed.
-  const meta = await call("read-design", {
-    design_id: designId,
-    ...(transactionId ? { transaction_id: transactionId } : { open_transaction: true }),
-    filter: { fields: ["page_metadata"] },
-    user_intent: "Map the text boxes of the proposal copy before filling it",
-  });
-  if (meta.isError) return { error: `Canva read failed: ${meta.text.slice(0, 400)}` };
-  const mj = parseJson(meta.text) || {};
-  const txn = transactionId || mj?.transaction?.transaction_id || mj?.transaction_id;
-  if (!txn) return { error: `Canva did not open an editing session. Its answer began: ${meta.text.slice(0, 400)}` };
-  const pm = mj.page_metadata;
-  const total = Array.isArray(pm) ? pm.length : Number(pm?.total_pages || mj?.design_metadata?.page_count) || 0;
-  const want = (pages && pages.length ? pages : Array.from({ length: total }, (_, i) => i + 1)).filter((n) => n >= 1 && (!total || n <= total));
-  const out: MapPage[] = [];
-  for (let i = 0; i < want.length; i += PAGES_PER_READ) {
-    const chunk = want.slice(i, i + PAGES_PER_READ);
-    const r = await call("read-design", { design_id: designId, transaction_id: txn, filter: { fields: ["design_content"], page_indices: chunk }, user_intent: "Map the text boxes of the proposal copy" });
-    if (r.isError) return { error: `Canva read of pages ${chunk.join(",")} failed: ${r.text.slice(0, 300)}` };
-    const j = parseJson(r.text);
-    const dc = typeof j?.design_content === "string" ? parseJson(j.design_content) : j?.design_content;
-    const got: any[] = dc?.pages || j?.pages || [];
-    if (!got.length) return { error: `Canva returned no page structure for pages ${chunk.join(",")}. Its answer began: ${r.text.slice(0, 400)}` };
-    got.forEach((pg, k) => out.push(parsePage(pg, chunk[k] ?? chunk[0] + k)));
-  }
-  if (!out.length) return { error: `No pages to map (Canva reported ${total} pages). Its answer began: ${meta.text.slice(0, 300)}` };
-  return { map: { designId, transactionId: txn, pages: out, at: Date.now() } };
+interface EditOutcome {
+  page?: MapPage;
+  errors: string[];
+  images: CanvaImage[];
+  expired?: string;
 }
-
-export async function canvaDocMap(rawCall: CanvaCaller, input: { design_id: string; pages?: number[] }): Promise<CallResult> {
-  const call = withRetry(rawCall);
-  const designId = String(input?.design_id || "").trim();
-  const prev = getMap(designId);
-  const r = await readPages(call, designId, Array.isArray(input?.pages) ? input.pages.map(Number) : null);
-  if (r.error || !r.map) return { isError: true, text: r.error || "Could not map the design." };
-  // Merge with pages mapped earlier in the same session is not possible (new session), so replace.
-  maps.set(designId, r.map);
-  save(designId);
-  const note = prev && prev.transactionId !== r.map.transactionId ? "\n(A new editing session was opened; keys from an earlier map still apply if nothing was saved since.)" : "";
-  return { isError: false, text: renderMap(r.map) + note };
+interface Backend {
+  name: "v1" | "v2";
+  open(designId: string, pages: number[] | null): Promise<{ map?: DocMap; error?: string }>;
+  edit(map: DocMap, page: MapPage, ops: any[]): Promise<EditOutcome>;
+  finish(map: DocMap, how: "commit" | "cancel"): Promise<CallResult>;
+  savedText(designId: string, page: number): Promise<string | null>;
 }
 
 function expired(text: string): boolean {
   return /transaction|session/i.test(text) && /(expired|not found|invalid|no longer|unknown)/i.test(text);
 }
 
-export async function canvaDocFill(rawCall: CanvaCaller, input: FillInput): Promise<CallResult> {
-  const call = withRetry(rawCall);
+function okStatus(st: any): boolean {
+  return !st || /success|applied|ok/i.test(String(st));
+}
+
+async function defaultFetchImage(url: string): Promise<CanvaImage | null> {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" || !/(^|\.)canva\.com$/i.test(u.hostname)) return null;
+    const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    const type = (res.headers.get("content-type") || "").split(";")[0].trim();
+    if (!res.ok || !/^image\/(png|jpeg|gif|webp)$/.test(type)) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 3_500_000) return null;
+    return { data: buf.toString("base64"), mimeType: type };
+  } catch {
+    return null;
+  }
+}
+
+// v2: read-design / edit-design --------------------------------------------
+
+function v2(conn: CanvaConn): Backend {
+  const call = withRetry(conn.call);
+  return {
+    name: "v2",
+    async open(designId, pages) {
+      const meta = await call("read-design", { design_id: designId, open_transaction: true, filter: { fields: ["page_metadata"] }, user_intent: "Map the text boxes of the proposal copy before filling it" });
+      if (meta.isError) return { error: `Canva read failed: ${meta.text.slice(0, 400)}` };
+      const mj = parseJson(meta.text) || {};
+      const txn = mj?.transaction?.transaction_id || mj?.transaction_id;
+      if (!txn) return { error: `Canva did not open an editing session. Its answer began: ${meta.text.slice(0, 400)}` };
+      const pm = mj.page_metadata;
+      const total = Array.isArray(pm) ? pm.length : Number(pm?.total_pages || mj?.design_metadata?.page_count) || 0;
+      const want = (pages && pages.length ? pages : Array.from({ length: total }, (_, i) => i + 1)).filter((n) => n >= 1 && (!total || n <= total));
+      const out: MapPage[] = [];
+      for (let i = 0; i < want.length; i += PAGES_PER_READ) {
+        const chunk = want.slice(i, i + PAGES_PER_READ);
+        const r = await call("read-design", { design_id: designId, transaction_id: txn, filter: { fields: ["design_content"], page_indices: chunk }, user_intent: "Map the text boxes of the proposal copy" });
+        if (r.isError) return { error: `Canva read of pages ${chunk.join(",")} failed: ${r.text.slice(0, 300)}` };
+        const j = parseJson(r.text);
+        const dc = typeof j?.design_content === "string" ? parseJson(j.design_content) : j?.design_content;
+        const got: any[] = dc?.pages || j?.pages || [];
+        if (!got.length) return { error: `Canva returned no page structure for pages ${chunk.join(",")}. Its answer began: ${r.text.slice(0, 400)}` };
+        got.forEach((pg, k) => out.push(parsePage(pg, chunk[k] ?? chunk[0] + k)));
+      }
+      if (!out.length) return { error: `No pages to map (Canva reported ${total} pages). Its answer began: ${meta.text.slice(0, 300)}` };
+      return { map: { designId, transactionId: txn, pages: out, at: Date.now() } };
+    },
+    async edit(map, page, ops) {
+      const out: EditOutcome = { errors: [], images: [] };
+      for (let i = 0; i < ops.length; i += 30) {
+        const chunk = ops.slice(i, i + 30);
+        const r = await call("edit-design", { transaction_id: map.transactionId, page_index: page.index, operations: chunk, finalize: "keep_open", user_intent: "Fill the proposal copy with the approved text" });
+        if (r.isError) {
+          if (expired(r.text)) return { ...out, expired: r.text.slice(0, 200) };
+          out.errors.push(r.text.slice(0, 300));
+          continue;
+        }
+        const j = parseJson(r.text);
+        for (const res of j?.edit_operation_results || []) if (!okStatus(res?.status)) out.errors.push(`${res.operation_info?.type || "operation"}: ${res.status} ${res.message || ""}`.trim());
+        if (j?.document?.page) out.page = parsePage(j.document.page, page.index);
+        if (r.images?.length) out.images = [r.images[r.images.length - 1]];
+      }
+      return out;
+    },
+    finish(map, how) {
+      return call("edit-design", { transaction_id: map.transactionId, finalize: how, user_intent: how === "commit" ? "Save the approved changes to the proposal copy" : "Discard the draft changes on the proposal copy" });
+    },
+    async savedText(designId, page) {
+      const r = await call("read-design", { design_id: designId, filter: { fields: ["design_content"], page_indices: [page] }, user_intent: "Check the saved copy for leftover template text" });
+      if (r.isError) return null;
+      const c = parseJson(r.text)?.design_content;
+      return typeof c === "string" ? c : JSON.stringify(c || "");
+    },
+  };
+}
+
+// v1: start-editing-transaction / perform-editing-operations -----------------
+
+/** Pages and elements from a v1 answer (start-editing-transaction or perform-editing-operations). */
+export function parseV1(j: any): MapPage[] {
+  const metas: any[] = Array.isArray(j?.pages) ? j.pages : [];
+  const pages = new Map<number, MapPage>();
+  const pageOf = (n: number): MapPage => {
+    if (!pages.has(n)) {
+      const m = metas.find((p) => Number(p?.page_number ?? p?.index) === n) || {};
+      pages.set(n, {
+        index: n,
+        locator: String(m.page_id || m.id || ""),
+        width: Number(m.dimension?.width ?? m.dimensions?.width) || 0,
+        height: Number(m.dimension?.height ?? m.dimensions?.height) || 0,
+        editable: m.is_editable !== false,
+        elements: [],
+      });
+    }
+    return pages.get(n)!;
+  };
+  for (const m of metas) pageOf(Number(m?.page_number ?? m?.index) || 1);
+  const texts = new Map<number, MapElement[]>();
+  const imgs = new Map<number, MapElement[]>();
+  for (const rt of Array.isArray(j?.richtexts) ? j.richtexts : []) {
+    const id = String(rt?.element_id || rt?.locator_id || "");
+    if (!id) continue;
+    const n = Number(rt?.page_index) || 1;
+    const pos = rt?.containerElement?.position || rt?.position || {};
+    const dim = rt?.containerElement?.dimension || rt?.dimension || {};
+    const regions: any[] = Array.isArray(rt?.regions) ? rt.regions : [];
+    const runs: Run[] = regions.map((r, i) => ({
+      i,
+      text: String(r?.text ?? r?.characters ?? ""),
+      // v1 regions carry no styling; treat every run as its own style so whole-box replacement is never used.
+      style: r?.formatting ? styleOf(r.formatting) : `run ${i}`,
+      ...(r?.formatting?.link || r?.link ? { link: String(r.formatting?.link || r.link) } : {}),
+    }));
+    if (!runs.some((x) => x.text.trim())) continue;
+    const list = texts.get(n) || [];
+    list.push({ key: "", locator: id, kind: "text", box: { top: Number(pos.top) || 0, left: Number(pos.left) || 0, width: Number(dim.width) || 0, height: Number(dim.height) || 0 }, runs });
+    texts.set(n, list);
+  }
+  for (const f of Array.isArray(j?.fills) ? j.fills : []) {
+    const id = String(f?.element_id || f?.locator_id || "");
+    if (!id) continue;
+    const n = Number(f?.page_index) || 1;
+    const list = imgs.get(n) || [];
+    list.push({ key: "", locator: id, kind: "image", box: { top: 0, left: 0, width: 0, height: 0 } });
+    imgs.set(n, list);
+  }
+  for (const n of new Set([...texts.keys(), ...imgs.keys()])) {
+    const page = pageOf(n);
+    const t = (texts.get(n) || []).sort((a, b) => round(a.box.top / 8) - round(b.box.top / 8) || a.box.left - b.box.left);
+    t.forEach((e, k) => (e.key = `p${n}.t${k + 1}`));
+    (imgs.get(n) || []).forEach((e, k) => (e.key = `p${n}.i${k + 1}`));
+    page.elements = [...t, ...(imgs.get(n) || [])];
+  }
+  return [...pages.values()].sort((a, b) => a.index - b.index);
+}
+
+/** v1 operations name the element element_id; page-wide swaps become one swap per box that holds the phrase. */
+export function toV1Ops(page: MapPage, ops: any[]): any[] {
+  const out: any[] = [];
+  for (const op of ops) {
+    if (op?.locator_id && op.locator_id === page.locator && op.type === "find_and_replace_text") {
+      for (const el of page.elements) {
+        if (el.kind === "text" && (el.runs || []).some((r) => r.text.includes(op.find_text))) out.push({ type: op.type, element_id: el.locator, find_text: op.find_text, replace_text: op.replace_text });
+      }
+      continue;
+    }
+    const { locator_id, ...rest } = op || {};
+    out.push(locator_id ? { ...rest, element_id: locator_id } : rest);
+  }
+  return out;
+}
+
+function v1(conn: CanvaConn): Backend {
+  const call = withRetry(conn.call);
+  const fetchImage = conn.fetchImage || defaultFetchImage;
+  return {
+    name: "v1",
+    async open(designId, pages) {
+      const r = await call("start-editing-transaction", { design_id: designId, user_intent: "Map the text boxes of the proposal copy before filling it" });
+      if (r.isError) return { error: `Canva could not open an editing session: ${r.text.slice(0, 400)}` };
+      const j = parseJson(r.text) || {};
+      const txn = j?.transaction?.transaction_id || j?.transaction_id;
+      if (!txn) return { error: `Canva did not return an editing session id. Its answer began: ${r.text.slice(0, 600)}` };
+      let all = parseV1(j);
+      if (pages && pages.length) all = all.filter((p) => pages.includes(p.index));
+      if (!all.some((p) => p.elements.length)) return { error: `Canva's answer held no text boxes I could read. Its answer began: ${r.text.slice(0, 600)}` };
+      return { map: { designId, transactionId: txn, pages: all, at: Date.now() } };
+    },
+    async edit(map, page, ops) {
+      const out: EditOutcome = { errors: [], images: [] };
+      const v1ops = toV1Ops(page, ops);
+      let thumbs: any[] = [];
+      for (let i = 0; i < v1ops.length; i += 30) {
+        const chunk = v1ops.slice(i, i + 30);
+        const r = await call("perform-editing-operations", { transaction_id: map.transactionId, page_index: page.index, operations: chunk, user_intent: "Fill the proposal copy with the approved text" });
+        if (r.isError) {
+          if (expired(r.text)) return { ...out, expired: r.text.slice(0, 200) };
+          out.errors.push(r.text.slice(0, 300));
+          continue;
+        }
+        const j = parseJson(r.text) || {};
+        for (const res of j?.edit_operation_results || []) if (!okStatus(res?.status)) out.errors.push(`${res.operation_info?.type || "operation"}: ${res.status} ${res.message || ""}`.trim());
+        const after = parseV1(j).find((p) => p.index === page.index);
+        if (after && after.elements.length) out.page = { ...after, locator: after.locator || page.locator, width: after.width || page.width, height: after.height || page.height };
+        if (r.images?.length) out.images = [r.images[r.images.length - 1]];
+        if (Array.isArray(j?.thumbnails)) thumbs = j.thumbnails;
+      }
+      if (!out.images.length && thumbs.length) {
+        const t = thumbs.length > 1 ? thumbs[page.index - 1] || thumbs[0] : thumbs[0];
+        const img = t?.url ? await fetchImage(String(t.url)) : null;
+        if (img) out.images = [img];
+      }
+      return out;
+    },
+    finish(map, how) {
+      return call(how === "commit" ? "commit-editing-transaction" : "cancel-editing-transaction", { transaction_id: map.transactionId, user_intent: how === "commit" ? "Save the approved changes to the proposal copy" : "Discard the draft changes on the proposal copy" });
+    },
+    async savedText(designId, page) {
+      const r = await call("get-design-content", { design_id: designId, content_types: ["richtexts"], pages: [page], user_intent: "Check the saved copy for leftover template text" });
+      return r.isError ? null : r.text;
+    },
+  };
+}
+
+export function pickBackend(conn: CanvaConn): Backend | null {
+  if (conn.has("read-design") && conn.has("edit-design")) return v2(conn);
+  if (conn.has("start-editing-transaction") && conn.has("perform-editing-operations")) return v1(conn);
+  return null;
+}
+
+const NO_TOOLS = "This Canva connection has neither read-design/edit-design nor start-editing-transaction/perform-editing-operations, so the page tools cannot work. Check canva_status for the tool list.";
+
+// ---- the two tools -------------------------------------------------------
+
+export async function canvaDocMap(c: CanvaCaller | CanvaConn, input: { design_id: string; pages?: number[] }): Promise<CallResult> {
+  const backend = pickBackend(toConn(c));
+  if (!backend) return { isError: true, text: NO_TOOLS };
+  const designId = String(input?.design_id || "").trim();
+  const prev = getMap(designId);
+  const r = await backend.open(designId, Array.isArray(input?.pages) ? input.pages.map(Number) : null);
+  if (r.error || !r.map) return { isError: true, text: r.error || "Could not map the design." };
+  maps.set(designId, r.map);
+  save(designId);
+  const note = prev && prev.transactionId !== r.map.transactionId ? "\n(A new editing session was opened; keys from an earlier map still apply if nothing was saved since.)" : "";
+  const v1note = backend.name === "v1" ? "\n(This Canva connection gives no styling or image positions: every run is listed separately, so always rewrite run by run, and check images on the thumbnails.)" : "";
+  return { isError: false, text: renderMap(r.map) + v1note + note };
+}
+
+export async function canvaDocFill(c: CanvaCaller | CanvaConn, input: FillInput): Promise<CallResult> {
+  const backend = pickBackend(toConn(c));
+  if (!backend) return { isError: true, text: NO_TOOLS };
   const designId = String(input?.design_id || "").trim();
   let map = getMap(designId);
   if (!map) return { isError: true, text: "No map for this design. Call canva_doc_map first." };
@@ -474,7 +701,7 @@ export async function canvaDocFill(rawCall: CanvaCaller, input: FillInput): Prom
   if (input?.reapply) {
     const prev = lastFill.get(designId);
     if (!prev) return { isError: true, text: "Nothing stored to re-apply for this design." };
-    const fresh = await readPages(call, designId, map.pages.map((p) => p.index));
+    const fresh = await backend.open(designId, map.pages.map((p) => p.index));
     if (fresh.error || !fresh.map) return { isError: true, text: fresh.error || "Could not reopen the design." };
     map = fresh.map;
     maps.set(designId, map);
@@ -492,33 +719,18 @@ export async function canvaDocFill(rawCall: CanvaCaller, input: FillInput): Prom
     for (const p of problems) report.push(`⚠ ${p}`);
     for (const plan of pages) {
       const before = map.pages.find((p) => p.index === plan.page)!;
-      let lastPage: any = null;
-      const errors: string[] = [];
-      for (let i = 0; i < plan.operations.length; i += 30) {
-        const ops = plan.operations.slice(i, i + 30);
-        const r = await call("edit-design", { transaction_id: map.transactionId, page_index: plan.page, operations: ops, finalize: "keep_open", user_intent: "Fill the proposal copy with the approved text" });
-        if (r.isError) {
-          if (expired(r.text)) return { isError: true, text: `The Canva editing session has expired. Call canva_doc_fill again with reapply: true (and the same finalize) to redo the stored edits in a new session.\n${r.text.slice(0, 200)}` };
-          errors.push(r.text.slice(0, 300));
-          continue;
-        }
-        const j = parseJson(r.text);
-        for (const res of j?.edit_operation_results || []) if (res?.status && !/applied/.test(res.status)) errors.push(`${res.operation_info?.type || "operation"}: ${res.status} ${res.message || ""}`.trim());
-        applied += ops.length;
-        if (j?.document?.page) lastPage = j.document.page;
-        if (r.images?.length) {
-          // keep only the latest thumbnail of this page
-          if (i + 30 >= plan.operations.length) images.push(r.images[r.images.length - 1]);
-        }
-      }
-      const warns = lastPage ? fitWarnings(before, lastPage, plan.touched) : [];
-      report.push(`Page ${plan.page}: ${plan.operations.length} change${plan.operations.length === 1 ? "" : "s"}${errors.length ? `, ${errors.length} problem(s)` : ""}`);
-      for (const e of errors) report.push(`  ✗ ${e}`);
+      const res = await backend.edit(map, before, plan.operations);
+      if (res.expired) return { isError: true, text: `The Canva editing session has expired. Call canva_doc_fill again with reapply: true (and the same finalize) to redo the stored edits in a new session.\n${res.expired}` };
+      applied += plan.operations.length;
+      images.push(...res.images);
+      const warns = res.page ? fitWarnings(before, res.page, plan.touched) : [];
+      report.push(`Page ${plan.page}: ${plan.operations.length} change${plan.operations.length === 1 ? "" : "s"}${res.errors.length ? `, ${res.errors.length} problem(s)` : ""}`);
+      for (const e of res.errors) report.push(`  ✗ ${e}`);
       for (const w of warns) report.push(`  ⚠ ${w}`);
       for (const n of plan.notes) report.push(`  · ${n}`);
-      if (lastPage) {
+      if (res.page) {
         // Keep the map in step with the edited page, so a second fill in the same session sees the new text.
-        const updated = rekey(parsePage(lastPage, plan.page), before);
+        const updated = rekey(res.page, before);
         map.pages = map.pages.map((p) => (p.index === plan.page ? updated : p));
       }
     }
@@ -531,14 +743,14 @@ export async function canvaDocFill(rawCall: CanvaCaller, input: FillInput): Prom
   }
 
   if (finalize === "cancel") {
-    const r = await call("edit-design", { transaction_id: map.transactionId, finalize: "cancel", user_intent: "Discard the draft changes on the proposal copy" });
+    const r = await backend.finish(map, "cancel");
     lastFill.delete(designId);
     save(designId);
     return { isError: r.isError, text: r.isError ? `Cancel failed: ${r.text.slice(0, 300)}` : "Draft changes discarded. Nothing was saved." };
   }
 
   if (finalize === "commit") {
-    const r = await call("edit-design", { transaction_id: map.transactionId, finalize: "commit", user_intent: "Save the approved changes to the proposal copy" });
+    const r = await backend.finish(map, "commit");
     if (r.isError) {
       if (expired(r.text)) return { isError: true, text: "The Canva editing session expired before saving. Call canva_doc_fill with reapply: true and finalize: \"commit\"." };
       return { isError: true, text: `Saving failed: ${r.text.slice(0, 400)}` };
@@ -550,11 +762,8 @@ export async function canvaDocFill(rawCall: CanvaCaller, input: FillInput): Prom
     if (terms.length) {
       const texts: { page: number; text: string }[] = [];
       for (const p of map.pages) {
-        const rr = await call("read-design", { design_id: designId, filter: { fields: ["design_content"], page_indices: [p.index] }, user_intent: "Check the saved copy for leftover template text" });
-        if (rr.isError) continue;
-        const j = parseJson(rr.text);
-        const c = j?.design_content;
-        texts.push({ page: p.index, text: typeof c === "string" ? c : JSON.stringify(c || "") });
+        const t = await backend.savedText(designId, p.index);
+        if (t !== null) texts.push({ page: p.index, text: t });
       }
       const left = findTerms(texts, terms);
       report.push(left.length ? "Leftovers found:" : `No leftovers found for: ${terms.join(", ")}.`);

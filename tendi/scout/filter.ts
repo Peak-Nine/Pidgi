@@ -21,7 +21,9 @@ export const POSITIVE = [
   "capacity building", "capacity development", "capaciteitsopbouw", "renforcement des capacités", "coaching", "accompagnement", "incubation", "accelerat",
   "ecosystem mapping", "stakeholder mapping", "value chain", "market system", "msd", "private sector engagement", "partnership strategy",
   "feasibility study", "haalbaarheidsstudie", "étude de faisabilité", "scoping study", "landscape analysis", "diagnostic", "assessment",
-  "digital health", "health system", "rehabilitation", "livelihood", "agri", "food system", "youth employment", "entrepreneurship", "tvet", "skills",
+  "digital health", "health system", "health", "reproductive", "gender", "empower", "women", "rehabilitation", "livelihood", "agri", "food system", "youth employment", "entrepreneurship", "tvet", "skills",
+  // knowledge and facilitation work (the Ipas and Oxfam kind): synthesis, learning products, workshops
+  "knowledge management", "knowledge product", "synthesis", "learning", "facilitation", "workshop", "documentation", "communication strategy", "policy brief",
   "consultancy", "consultant", "consulting", "advisory", "technical assistance", "assistance technique", "expertise",
   // generic study and advice words, per language (the scorer sorts out the rest)
   "study", "studies", "capacity strengthening", "organisational development", "organizational development",
@@ -54,7 +56,8 @@ const META_SKIP = new Set(["ted_category", "notice_type", "closing_raw", "status
 
 // Sources whose notice text is long boilerplate ("the consultant shall...", "evaluation
 // criteria"): every notice would match, so only the title and project name count.
-const TITLE_ONLY_SOURCES = new Set(["worldbank"]);
+// GIZ gives only a title plus a fixed note about the portal, so the same applies.
+const TITLE_ONLY_SOURCES = new Set(["worldbank", "giz"]);
 
 export function textOf(o: Opportunity): string {
   if (TITLE_ONLY_SOURCES.has(o.source)) return `${o.title}\n${o.meta?.project || ""}`.toLowerCase();

@@ -121,6 +121,11 @@ export interface ScoutServiceDeps {
   anthropic: Anthropic;
   adminOk: (req: any, res: any) => boolean;
   startProposal: (args: { channel: string; userId: string; record: SeenRecord }) => Promise<void>;
+  /** The Notion Tender Board, when configured: 👍 creates a card in Relevant, "Start a proposal" moves it to Work in progress. */
+  board?: {
+    thumbsUp: (record: SeenRecord) => Promise<{ action: string; url: string }>;
+    startProposal: (record: SeenRecord, userId: string) => Promise<{ action: string; url: string }>;
+  } | null;
   log?: (line: string) => void;
 }
 
@@ -237,6 +242,19 @@ export function startScoutService(deps: ScoutServiceDeps) {
     addFeedback({ itemId: rec.id, title: rec.title, buyer: rec.buyer, verdict: v, by: event.user, at: Date.now() });
     saveState();
     log(`feedback ${v} on ${rec.id} by ${event.user}`);
+    if (v === "up" && deps.board) {
+      try {
+        const r = await deps.board.thumbsUp(rec);
+        log(`board: ${r.action} for ${rec.id} (${r.url})`);
+        try {
+          await deps.app.client.chat.postMessage({ channel: event.item.channel, thread_ts: event.item.ts, text: `📌 Tender Board: ${r.action}. ${r.url}`, unfurl_links: false });
+        } catch {
+          /* the note is a courtesy */
+        }
+      } catch (e: any) {
+        log(`board write failed for ${rec.id}: ${e?.message || e}`);
+      }
+    }
   });
   deps.app.event("reaction_removed", async ({ event }: any) => {
     const v = verdictFromReaction(event?.reaction);
@@ -266,6 +284,12 @@ export function startScoutService(deps: ScoutServiceDeps) {
         /* ignore */
       }
       return;
+    }
+    if (deps.board) {
+      deps.board
+        .startProposal(rec, userId)
+        .then((r) => log(`board: ${r.action} for ${rec.id} (${r.url})`))
+        .catch((e: any) => log(`board write failed for ${rec.id}: ${e?.message || e}`));
     }
     try {
       await deps.startProposal({ channel, userId, record: rec });
