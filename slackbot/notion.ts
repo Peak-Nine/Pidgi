@@ -25,7 +25,7 @@
  *     then pass a matching `properties` object.
  */
 import { Client } from "@notionhq/client";
-import { isTaskBoardDatabase, normId } from "./taskboards.js";
+import { isTaskBoardDatabase, normId, PRIVATE_REPLY } from "./taskboards.js";
 
 // Pinned, stable Notion API version. If a newer database feature misbehaves,
 // this is the first thing to revisit.
@@ -58,6 +58,21 @@ export function notionClient(): Client {
   return new Client({
     auth,
     notionVersion: NOTION_VERSION,
+    fetch: (url: any, init: any) => (globalThis as any).fetch(url, init),
+  } as any);
+}
+
+/**
+ * A client on the newer API version that knows data sources. Only used to write to and read
+ * the schema of a database with several data sources (Mothership), which the pinned
+ * 2022-06-28 version can't address.
+ */
+export function notionDataSourceClient(): Client {
+  const auth = process.env.NOTION_TOKEN;
+  if (!auth) throw new Error("NOTION_TOKEN is not set");
+  return new Client({
+    auth,
+    notionVersion: "2025-09-03",
     fetch: (url: any, init: any) => (globalThis as any).fetch(url, init),
   } as any);
 }
@@ -276,57 +291,106 @@ export const notionToolDefs = [
 ];
 
 /**
- * Private boards (the Touchdown agenda and the rest of the Touchdown page) are hidden from
- * people outside their circle. index.ts passes the ids this Slack user may not touch; any
- * read or write that lands on one of them, or on a row or block directly under one, is refused.
+ * Private boards (Touchdown, Mothership) are hidden from people outside their circle.
+ * index.ts passes the ids this Slack user may not touch; any read or write that lands on one
+ * of them, or anywhere below one, is refused with PRIVATE_REPLY, which never says what is there.
+ * restrictedIds + onPrivate let index.ts notice when a turn touched a private board at all,
+ * so that turn stays out of a channel's shared memory.
  */
 export interface NotionAccess {
   hiddenIds?: string[];
+  restrictedIds?: string[];
+  onPrivate?: () => void;
 }
 
-const PRIVATE_MSG = "That page is private to a smaller group, so I can't open or change it for you.";
+const PRIVATE_MSG = PRIVATE_REPLY;
 
-/** The id itself plus its parent (database, page or block), so rows and sub-pages count too. */
-async function idAndParents(c: Client, id: string): Promise<string[]> {
-  const out = [normId(id)];
-  const parentIds = (o: any): string[] => [o?.parent?.database_id, o?.parent?.page_id, o?.parent?.block_id].filter(Boolean).map(String);
-  try {
-    const page: any = await c.pages.retrieve({ page_id: id });
-    out.push(...parentIds(page).map(normId));
-    return out;
-  } catch {
-    /* not a page: try it as a block */
-  }
-  try {
-    const blk: any = await c.blocks.retrieve({ block_id: id });
-    const parents = parentIds(blk);
-    out.push(...parents.map(normId));
-    // A block inside a row: look one more level up.
-    for (const pid of parents) {
-      try {
-        const page: any = await c.pages.retrieve({ page_id: pid });
-        out.push(...parentIds(page).map(normId));
-      } catch {
-        /* the parent was not a page */
-      }
+/** Parent ids of a page, database or block (any parent type). */
+function parentIds(o: any): string[] {
+  const p = o?.parent || {};
+  return [p.database_id, p.data_source_id, p.page_id, p.block_id].filter(Boolean).map((x: any) => normId(String(x)));
+}
+
+// Ancestors change rarely; cache them so a search over many rows stays fast.
+const ancestorCache = new Map<string, { at: number; ids: string[] }>();
+const ANCESTOR_TTL_MS = 10 * 60 * 1000;
+const MAX_DEPTH = 15;
+
+/**
+ * Parents of an id. Throws when Notion couldn't say (network, rate limit), so callers fail
+ * closed. An id Notion doesn't know or doesn't share with Pidgi simply has no parents here.
+ */
+async function parentsOf(c: Client, id: string): Promise<string[]> {
+  let unsure: any = null;
+  for (const get of [
+    () => c.pages.retrieve({ page_id: id }),
+    () => c.databases.retrieve({ database_id: id }),
+    () => c.blocks.retrieve({ block_id: id }),
+  ]) {
+    try {
+      return parentIds(await withRetry(get as any));
+    } catch (e: any) {
+      // Wrong kind of object, or not shared with Pidgi: try the next kind.
+      if (!/object_not_found|validation_error|invalid_request_url/i.test(String(e?.code || e?.message || ""))) unsure = e;
     }
-  } catch {
-    /* unknown id: the real call below will report it */
   }
-  return out;
+  if (unsure) throw unsure;
+  return [];
 }
 
-async function touchesHidden(c: Client, id: string | undefined, hidden: Set<string>): Promise<boolean> {
-  if (!id || !hidden.size) return false;
-  if (hidden.has(normId(id))) return true;
-  return (await idAndParents(c, String(id))).some((x) => hidden.has(x));
+/** The id and every ancestor up to the workspace, so rows, sub-pages and blocks at any depth count. */
+async function ancestry(c: Client, id: string): Promise<string[]> {
+  const start = normId(id);
+  const hit = ancestorCache.get(start);
+  if (hit && Date.now() - hit.at < ANCESTOR_TTL_MS) return hit.ids;
+  const out = [start];
+  let frontier = [String(id)];
+  for (let depth = 0; depth < MAX_DEPTH && frontier.length; depth++) {
+    const next: string[] = [];
+    for (const f of frontier) {
+      const cached = normId(f) !== start ? ancestorCache.get(normId(f)) : undefined;
+      if (cached && Date.now() - cached.at < ANCESTOR_TTL_MS) {
+        out.push(...cached.ids);
+        continue;
+      }
+      for (const pid of await parentsOf(c, f)) if (!out.includes(pid)) next.push(pid);
+    }
+    out.push(...next);
+    frontier = next;
+  }
+  const ids = Array.from(new Set(out));
+  ancestorCache.set(start, { at: Date.now(), ids });
+  return ids;
+}
+
+/** Is the id, or anything above it, in `ids`? When Notion can't tell, the answer is yes. */
+async function touchesAny(c: Client, id: string | undefined, ids: Set<string>): Promise<boolean> {
+  if (!id || !ids.size) return false;
+  if (ids.has(normId(id))) return true;
+  try {
+    return (await ancestry(c, String(id))).some((x) => ids.has(x));
+  } catch {
+    return true;
+  }
+}
+
+/** Keep the items that are not under a hidden id (checked a few at a time). */
+async function withoutHidden<T>(c: Client, items: T[], idOf: (t: T) => string, hidden: Set<string>): Promise<T[]> {
+  if (!hidden.size) return items;
+  const keep: boolean[] = [];
+  for (let i = 0; i < items.length; i += 4) {
+    const chunk = items.slice(i, i + 4);
+    keep.push(...(await Promise.all(chunk.map(async (t) => !(await touchesAny(c, idOf(t), hidden))))));
+  }
+  return items.filter((_, i) => keep[i]);
 }
 
 export async function handleNotionTool(name: string, input: any, access: NotionAccess = {}): Promise<{ text: string; isError: boolean }> {
   try {
     const c = notionClient();
     const hidden = new Set((access.hiddenIds || []).map(normId));
-    if (hidden.size) {
+    const restricted = new Set((access.restrictedIds || []).map(normId));
+    {
       const target =
         name === "notion_get_page" || name === "notion_append_blocks" || name === "notion_update_page_properties"
           ? input?.page_id
@@ -339,7 +403,8 @@ export async function handleNotionTool(name: string, input: any, access: NotionA
                 : name === "notion_create_database"
                   ? input?.parent_page_id
                   : undefined;
-      if (await touchesHidden(c, target, hidden)) return { text: PRIVATE_MSG, isError: true };
+      if (await touchesAny(c, target, hidden)) return { text: PRIVATE_MSG, isError: true };
+      if (access.onPrivate && (await touchesAny(c, target, restricted))) access.onPrivate();
     }
 
     if (name === "notion_search") {
@@ -348,9 +413,9 @@ export async function handleNotionTool(name: string, input: any, access: NotionA
         filter: input.object_type ? { property: "object", value: input.object_type } : undefined,
         page_size: input.page_size || 25,
       }));
-      const isHidden = (r: any) =>
-        [r?.id, r?.parent?.database_id, r?.parent?.page_id, r?.parent?.block_id].filter(Boolean).some((x: string) => hidden.has(normId(x)));
-      const items = (res.results || []).filter((r: any) => !isHidden(r)).map((r: any) => ({
+      const visible = await withoutHidden(c, res.results || [], (r: any) => r.id, hidden);
+      if (access.onPrivate && visible.some((r: any) => [normId(r.id), ...parentIds(r)].some((x) => restricted.has(x)))) access.onPrivate();
+      const items = visible.map((r: any) => ({
         id: r.id,
         object: r.object,
         title: titleOf(r),
@@ -367,7 +432,15 @@ export async function handleNotionTool(name: string, input: any, access: NotionA
         title: titleOf(page),
         url: page.url,
         properties: page.properties,
-        content: (blocks.results || []).map(blockToLine),
+        // Child pages/databases that are private to someone else are left out.
+        content: (
+          await withoutHidden(
+            c,
+            blocks.results || [],
+            (b: any) => (b.type === "child_page" || b.type === "child_database" ? b.id : ""),
+            hidden
+          )
+        ).map(blockToLine),
         has_more_blocks: !!blocks.has_more,
       };
       return { text: JSON.stringify(out, null, 2), isError: false };
@@ -395,7 +468,7 @@ export async function handleNotionTool(name: string, input: any, access: NotionA
       if (input.parent_database_id && isTaskBoardDatabase(String(input.parent_database_id))) {
         return {
           isError: true,
-          text: "Blocked: new items on the team boards (Laura's and Sankhya's boards, the Touchdown agenda, the team sync talking points) go through the draft card, so someone checks them before they land. Tell the user to tag Pidgi in the thread with e.g. \"turn this into a task for Laura by Friday\" or \"put this on the Touchdown agenda\"; Pidgi then reads the thread and posts a draft with an ✅ Add to board button. Updating existing rows is still fine.",
+          text: "Blocked: new items on the team boards go through the draft card, so someone checks them before they land. Tell the user that nothing was added and to tag Pidgi again with e.g. \"turn this into a task for Laura by Friday\"; Pidgi then reads the thread and posts a draft with an ✅ Add to board button. Updating existing rows is still fine.",
         };
       }
       let parent: any;

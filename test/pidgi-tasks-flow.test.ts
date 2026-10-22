@@ -4,9 +4,23 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { runTaskCapture, registerTaskActions } from "../slackbot/tasks.js";
+import { PRIVATE_REPLY } from "../slackbot/taskboards.js";
 
 const notionCalls: any[] = [];
+const schemaReads: string[] = []; // not cleared: the schema is cached across tests
 vi.mock("../slackbot/notion.js", () => ({
+  notionDataSourceClient: () => ({
+    request: async ({ path }: any) => {
+      schemaReads.push(path);
+      return { properties: { Project: { multi_select: { options: [{ name: "P9 - Sales" }, { name: "Personal" }] } } } };
+    },
+    pages: {
+      create: async (args: any) => {
+        notionCalls.push({ ...args, viaDataSource: true });
+        return { id: "page2", url: "https://www.notion.so/page2" };
+      },
+    },
+  }),
   notionClient: () => ({
     databases: {
       retrieve: async ({ database_id }: any) =>
@@ -205,8 +219,20 @@ describe("task capture flow", () => {
       "1789000000.000100"
     );
     expect(r.kind).toBe("handled");
+    // In a channel, colleagues read along: Niels's private boards aren't listed.
     expect(slack.calls.update[0].text).toBe(
-      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda and the Team sync talking points so far. Which one should this go to?"
+      "I can add things to Laura's board, Sankhya's board and the Team sync talking points so far. Which one should this go to?"
+    );
+    // In his DM with Pidgi they are.
+    const dm = fakeSlack(THREAD);
+    await runTaskCapture(
+      dm,
+      { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: () => true },
+      { channel: "D1", ts: "1789000180.000400", user: "UNIELS", text: "<@UBOT> task for Jonas", channel_type: "im" },
+      undefined
+    );
+    expect(dm.calls.update[0].text).toBe(
+      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda, Mothership and the Team sync talking points so far. Which one should this go to?"
     );
   });
 
@@ -267,7 +293,7 @@ describe("task capture flow", () => {
     // Bertille is on the write list, but Touchdown is Niels and Jonas only.
     await actions["p9task_create"]({ ack, body: body("UBERT"), action: createBtn, client: slack });
     expect(notionCalls).toHaveLength(0);
-    expect(slack.calls.ephemeral.pop().text).toMatch(/Touchdown agenda is private/);
+    expect(slack.calls.ephemeral.pop().text).toBe(PRIVATE_REPLY);
 
     await actions["p9task_create"]({ ack, body: body("UNIELS"), action: createBtn, client: slack });
     expect(notionCalls).toHaveLength(1);
@@ -281,20 +307,99 @@ describe("task capture flow", () => {
     expect(done).toContain("Assignee: Jonas");
   });
 
-  it("never shows the Touchdown agenda to the rest of the team", async () => {
+  it("never shows the private boards to the rest of the team", async () => {
     const slack = fakeSlack(THREAD);
     const claude = fakeClaude({ is_task_request: true, problem: "", tasks: [{ board: "unknown", title: "x", context: "", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] }] });
     await runTaskCapture(
       slack,
       { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: () => true },
-      { channel: "C1", ts: "1789000180.000400", thread_ts: "1789000000.000100", user: "ULAURA", text: "<@UBOT> put this on the touchdown" },
+      { channel: "C1", ts: "1789000180.000400", thread_ts: "1789000000.000100", user: "ULAURA", text: "<@UBOT> turn this into a task for Jonas" },
       "1789000000.000100"
     );
     const prompt = claude.seen[0].messages[0].content as string;
     expect(prompt).not.toContain("touchdown:");
+    expect(prompt).not.toContain("mothership:");
     expect(prompt).not.toContain("Niels and Jonas");
     expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "team", "unknown"]);
     expect(slack.calls.update[0].text).toBe("I can add things to Laura's board, Sankhya's board and the Team sync talking points so far. Which one should this go to?");
+  });
+
+  it("answers anyone who names a private board they're not part of with one neutral line", async () => {
+    for (const [user, text] of [
+      ["ULAURA", "<@UBOT> put this on the touchdown"],
+      ["ULAURA", "<@UBOT> add this to Niels's mothership"],
+      ["UJONAS", "<@UBOT> zet dit op de mothership"],
+      ["UJONAS", "<@UBOT> add a task to the Must Win Battle board"],
+    ]) {
+      const slack = fakeSlack(THREAD);
+      const claude = fakeClaude({});
+      const r = await runTaskCapture(
+        slack,
+        { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: () => true },
+        { channel: "C1", ts: "1789000180.000400", thread_ts: "1789000000.000100", user, text },
+        "1789000000.000100"
+      );
+      expect(r, text).toEqual({ kind: "handled", summary: PRIVATE_REPLY, private: true });
+      expect(slack.calls.postMessage.map((m: any) => m.text)).toEqual([PRIVATE_REPLY]);
+      expect(claude.seen).toHaveLength(0); // the request never reaches the model
+      expect(slack.calls.replies).toBeUndefined(); // nor is the thread read
+    }
+  });
+
+  it("puts a task on Niels's Mothership through its data source, and only Niels can add it", async () => {
+    notionCalls.length = 0;
+    const slack = fakeSlack(THREAD);
+    const claude = fakeClaude({
+      is_task_request: true,
+      problem: "",
+      tasks: [{ board: "mothership", title: "Call the accountant", context: "About the Q4 invoices.", deadline: "", deadline_quote: "", project: "P9 - Sales", responsible: "", urls: [] }],
+    });
+    const deps = { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: () => true };
+    const r = await runTaskCapture(
+      slack,
+      deps,
+      { channel: "D1", ts: "1789000180.000400", user: "UNIELS", text: "<@UBOT> put this on my mothership", channel_type: "im" },
+      undefined
+    );
+    expect(r).toMatchObject({ kind: "handled", private: true });
+    expect(claude.seen[0].messages[0].content).toContain("mothership: Mothership");
+    const card = slack.calls.update[0];
+
+    const actions: Record<string, any> = {};
+    registerTaskActions({ action: (id: any, fn: any) => (actions[String(id)] = fn), view: () => {} }, deps);
+    const createBtn = card.blocks.find((b: any) => b.block_id === "p9task_buttons").elements[0];
+    const body = (user: string) => ({ user: { id: user }, channel: { id: "D1" }, message: { ts: "9.1", blocks: card.blocks }, state: { values: {} } });
+    const ack = async () => {};
+
+    await actions["p9task_create"]({ ack, body: body("UJONAS"), action: createBtn, client: slack });
+    expect(notionCalls.filter((c) => c.parent)).toHaveLength(0);
+    expect(slack.calls.ephemeral.pop().text).toBe(PRIVATE_REPLY);
+
+    await actions["p9task_create"]({ ack, body: body("UNIELS"), action: createBtn, client: slack });
+    const row = notionCalls.find((c) => c.parent);
+    expect(row.viaDataSource).toBe(true);
+    expect(row.parent).toEqual({ type: "data_source_id", data_source_id: "2d3c675ff9588031805c000b7f320c36" });
+    expect(row.properties.Task).toEqual({ title: [expect.objectContaining({ text: expect.objectContaining({ content: "Call the accountant" }) })] });
+    expect(row.properties.Project).toEqual({ multi_select: [{ name: "P9 - Sales" }] });
+    expect(row.properties.Tags).toEqual({ multi_select: [{ name: "Tasks" }] });
+    expect(schemaReads).toContain("data_sources/2d3c675ff9588031805c000b7f320c36");
+  });
+
+  it("keeps Mothership out of the picker on Niels's cards in a channel", async () => {
+    const slack = fakeSlack(THREAD);
+    const claude = fakeClaude({
+      is_task_request: true,
+      problem: "",
+      tasks: [{ board: "laura", title: "Poster", context: "", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] }],
+    });
+    await runTaskCapture(
+      slack,
+      { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: () => true },
+      { channel: "C1", ts: "1789000180.000400", thread_ts: "1789000000.000100", user: "UNIELS", text: "<@UBOT> turn this into a task for Laura" },
+      "1789000000.000100"
+    );
+    const cardText = JSON.stringify(slack.calls.update[0].blocks);
+    expect(cardText).not.toMatch(/mothership|touchdown/i);
   });
 
   it("puts a talking point on the team sync with the asker as Creator", async () => {

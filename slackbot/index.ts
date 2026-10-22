@@ -43,7 +43,16 @@ import { renderShell, gatherDashboardData, gatherFinanceData, dashboardLink } fr
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { saveFormValue, loadFormValue, formsPersistent } from "./formstore.js";
 import { runTaskCapture, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
-import { looksLikeTaskRequest, hiddenNotionIds } from "./taskboards.js";
+import {
+  looksLikeTaskRequest,
+  hiddenNotionIds,
+  restrictedNotionIds,
+  mentionsHiddenBoard,
+  scrubPrivate,
+  boardsFor,
+  loadBoards,
+  PRIVATE_REPLY,
+} from "./taskboards.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -98,6 +107,18 @@ const PIGEON_LINES = [
   "One coo to rule the schedule. 🕊️",
 ];
 
+// Slack DM channel ids start with "D": only the person and Pidgi are in them.
+function isDirectMessage(convoKey: string): boolean {
+  return /^D/.test(convoKey);
+}
+
+/** For the system prompt: the private boards this person may use (nothing for anyone else). */
+function privateBoardsLine(email: string | null | undefined): string {
+  const mine = boardsFor(email, loadBoards()).filter((b) => b.restrictedTo?.length);
+  if (!mine.length) return "";
+  return ` They also have private boards: ${mine.map((b) => `${b.label} (${b.description})`).join("; ")}. Only talk about these with them, and keep them out of anything meant for others.`;
+}
+
 // True only when the message is essentially just dove emoji (or the :dove: shortcode),
 // so it never hijacks a real question that happens to contain a 🕊️.
 function doveTrigger(text: string): boolean {
@@ -119,16 +140,18 @@ databases (only those shared with the bot): search to find the page or database,
 learn its exact property names and block IDs, then create pages, append content, update
 properties (e.g. a status), or edit a block. Always read a page or database before changing
 it, and confirm what you're about to write before doing it.
-Team boards in Notion (Laura's and Sankhya's backlogs, the Touchdown agenda of Niels and Jonas,
-the team sync talking points): you never add rows to them yourself. New items go through the draft
+Team boards in Notion (Laura's and Sankhya's backlogs, the team sync talking points, and any private
+board named below for this person): you never add rows to them yourself. New items go through the draft
 flow: the user tags you in a thread with e.g. "turn this into a task for Laura by Friday" or "put
-this on the Touchdown agenda", and the draft flow posts a card with a real ✅ Add to board button.
+this on the team sync", and the draft flow posts a card with a real ✅ Add to board button.
 You can't post that card yourself: never write a "draft card" or an "Add to board" line in your own
 reply, because it looks like a button and does nothing. If someone asks you to add an item and you
 are answering, tell them plainly that nothing was added and to tag you again with e.g. "turn this
 into a task for Laura by Friday". Reading those boards and
-updating existing rows (e.g. a status) is fine. The Touchdown page is private to Niels and Jonas:
-if a tool says a page is private, tell the person plainly and don't look for a way around it.
+updating existing rows (e.g. a status) is fine.
+Some Notion pages are private to one or two people. When a tool answers with exactly "${PRIVATE_REPLY}",
+reply with exactly that sentence and nothing else: don't say a page is private, don't name it, don't
+guess what is there, and don't look for a way around it.
 
 Formatting for Slack (important):
 - Slack does NOT render Markdown. Use Slack mrkdwn: *single asterisks* for bold (never **double**),
@@ -493,7 +516,7 @@ async function main(): Promise<void> {
   // Assigned once the Bolt app is built (see below); used by the Slack admin tools.
   let slackWeb: any = null;
 
-  async function callTool(name: string, input: any, slackUserId: string): Promise<{ text: string; isError: boolean }> {
+  async function callTool(name: string, input: any, slackUserId: string, turn?: { private: boolean }): Promise<{ text: string; isError: boolean }> {
     if (isWriteTool(name) && !writeAllowed(slackUserId)) {
       return {
         isError: true,
@@ -693,9 +716,16 @@ async function main(): Promise<void> {
       return handleGcalTool(name, input);
     }
     if (name.startsWith("notion_")) {
-      // Private boards (the Touchdown agenda) stay hidden from everyone outside their circle.
+      // Private boards (Touchdown, Mothership) stay hidden from everyone outside their circle,
+      // and a turn that touches one is kept out of a channel's shared memory.
       const who = await resolveIdentity(slackUserId);
-      return handleNotionTool(name, input, { hiddenIds: hiddenNotionIds(who?.email || "") });
+      return handleNotionTool(name, input, {
+        hiddenIds: hiddenNotionIds(who?.email || ""),
+        restrictedIds: restrictedNotionIds(),
+        onPrivate: () => {
+          if (turn) turn.private = true;
+        },
+      });
     }
     if (name === "find_slack_channels") {
       try {
@@ -871,6 +901,7 @@ async function main(): Promise<void> {
   ): Promise<string> {
     const history = threadHistory.get(convoKey) ?? [];
     const messages: Anthropic.MessageParam[] = [...history, { role: "user", content: userText }];
+    const turn = { private: false };
     // System is split into two blocks so the big static prompt (and the tools before it)
     // form a stable, cacheable prefix that is shared across users and reused on every loop
     // step. The cache breakpoint sits on the static block; the per-user identity line goes
@@ -882,7 +913,7 @@ async function main(): Promise<void> {
     if (identity && (identity.email || identity.name)) {
       system.push({
         type: "text",
-        text: `Who you are talking to right now: ${identity.name || "a Peak Nine teammate"}${identity.email ? ` (${identity.email})` : ""}. When they say "me", "my", "my agenda" or "my calendar", that means THIS person and THIS email — use their email directly as calendar_email for the gcal_* tools (and as the person for "my" tasks) without asking which calendar, unless they explicitly name someone else.`,
+        text: `Who you are talking to right now: ${identity.name || "a Peak Nine teammate"}${identity.email ? ` (${identity.email})` : ""}. When they say "me", "my", "my agenda" or "my calendar", that means THIS person and THIS email — use their email directly as calendar_email for the gcal_* tools (and as the person for "my" tasks) without asking which calendar, unless they explicitly name someone else.${privateBoardsLine(identity.email)}`,
       });
     }
 
@@ -916,7 +947,7 @@ async function main(): Promise<void> {
           if (block.type === "tool_use") {
             let out: { text: string; isError: boolean };
             try {
-              out = await withTimeout(callTool(block.name, block.input, slackUserId), 90000, `Tool ${block.name}`);
+              out = await withTimeout(callTool(block.name, block.input, slackUserId, turn), 90000, `Tool ${block.name}`);
             } catch (e: any) {
               out = { isError: true, text: `Tool ${block.name} did not finish: ${e?.message || e}` };
             }
@@ -948,6 +979,10 @@ async function main(): Promise<void> {
 
     finalText = finalText.trim();
     if (!finalText) finalText = "I took too many steps without finishing. Try a more specific question.";
+
+    // A turn that touched a private board is only remembered in a DM: a channel's memory is
+    // shared by everyone who talks to Pidgi there.
+    if (turn.private && !isDirectMessage(convoKey)) return finalText;
 
     // Persist clean text-only history (drop the intra-turn tool calls).
     const updated: Anthropic.MessageParam[] = [
@@ -1195,6 +1230,13 @@ async function main(): Promise<void> {
       });
       return;
     }
+    // Someone naming a private board they're not part of gets one neutral line, and the
+    // question never reaches the model or the memory.
+    const asker = await resolveIdentity(slackUserId);
+    if (mentionsHiddenBoard(cleaned, asker?.email || "")) {
+      await say({ text: PRIVATE_REPLY, thread_ts: replyThreadTs });
+      return;
+    }
     // Immediate acknowledgement so the team knows Pidgi is working. This same message
     // is then edited into the final answer, so it never leaves clutter behind.
     let ack: any = null;
@@ -1210,7 +1252,7 @@ async function main(): Promise<void> {
           replyThreadTs
         );
         if (r.kind === "handled") {
-          remember(convoKey, cleaned, r.summary);
+          if (!r.private || isDirectMessage(convoKey)) remember(convoKey, cleaned, r.summary);
           return;
         }
         if (r.ack) {
@@ -1238,6 +1280,8 @@ async function main(): Promise<void> {
       let answer = await ask(cleaned, slackUserId, convoKey, identity);
       // Defensive: strip any stray legacy token that may linger in memory.
       answer = answer.split("<<DETAIL_FOLLOWUP>>").join("").trim();
+      // Last line of defence: an answer that names a private board this person isn't part of.
+      answer = scrubPrivate(answer, identity?.email || "");
       await deliver(say, ack, answer, replyThreadTs);
     } catch (e: any) {
       const msg = `Something went wrong: ${e?.message || e}`;
