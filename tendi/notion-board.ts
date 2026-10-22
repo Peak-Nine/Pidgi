@@ -199,6 +199,29 @@ export async function toProperties(c: CardInput): Promise<{ properties: Record<s
   return { properties: props, notes };
 }
 
+/**
+ * The model does not always send tender_board's card the same way: sometimes as an
+ * object, sometimes as a JSON string, sometimes with the fields at the top level next
+ * to "action". Accept all three, so "add" never says the name is missing when it isn't.
+ */
+export function boardCardFromInput(input: any): any {
+  let card: any = input?.card;
+  if (typeof card === "string") {
+    try {
+      card = JSON.parse(card);
+    } catch {
+      card = {};
+    }
+  }
+  if (!card || typeof card !== "object" || Array.isArray(card)) card = {};
+  const reserved = new Set(["action", "page_id", "query", "card", "stage_filter"]);
+  for (const [k, v] of Object.entries(input || {})) {
+    if (!reserved.has(k) && card[k] === undefined && v !== undefined && v !== null && v !== "") card[k] = v;
+  }
+  for (const k of Object.keys(card)) if (typeof card[k] === "string") card[k] = card[k].trim();
+  return card;
+}
+
 // ── queries ──────────────────────────────────────────────────────────────────
 
 // ── tender identity ──────────────────────────────────────────────────────────

@@ -58,7 +58,7 @@ import { downloadPdf, exportArgs, pickDownloadUrl } from "./canva-export.js";
 import { canvaDocFill, canvaDocMap, type CanvaConn } from "./canva-doc.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
 import { startScoutService, scoutConfig } from "./scout/service.js";
-import { boardConfigNote, boardEnabled, findCards, findSameTender, listCards, scoutStartProposal, scoutThumbsUp, updateCard, upsertCard, STAGES, SOURCES, FITS, PLAYBOOKS, OUTCOMES, ADDED_BY } from "./notion-board.js";
+import { boardCardFromInput, boardConfigNote, boardEnabled, findCards, findSameTender, listCards, scoutStartProposal, scoutThumbsUp, updateCard, upsertCard, STAGES, SOURCES, FITS, PLAYBOOKS, OUTCOMES, ADDED_BY } from "./notion-board.js";
 import { scoutDigestBlock, scoutItemBlock } from "./scout/handoff.js";
 import { itemsForDigest, type SeenRecord } from "./scout/store.js";
 
@@ -451,7 +451,7 @@ async function main(): Promise<void> {
       if (!boardEnabled()) return { isError: true, text: boardConfigNote() };
       try {
         const action = String(input?.action || "");
-        const card = (input?.card || {}) as any;
+        const card = boardCardFromInput(input);
         if (action === "list") {
           const stage = card?.stage || input?.stage;
           const cards = await listCards(stage, 25);
@@ -466,7 +466,7 @@ async function main(): Promise<void> {
           return { isError: false, text: JSON.stringify({ query: q, count: cards.length, cards }) };
         }
         if (action === "add") {
-          if (!card?.name) return { isError: true, text: "add needs card.name (Buyer · short title)." };
+          if (!card?.name) return { isError: true, text: `add needs card.name (Buyer · short title). Received card fields: ${Object.keys(card).join(", ") || "none"}. Pass card as an object, e.g. {"action":"add","card":{"name":"UNDP Bosnia · ...","reference":"..."}}.` };
           const r = await upsertCard(card);
           const say = r.action === "updated" ? `Existing card updated (${r.match}): ${r.card.url}` : `Card created: ${r.card.url}`;
           return { isError: false, text: JSON.stringify({ [r.action]: true, match: r.match, card: r.card, notes: r.notes, say }) };

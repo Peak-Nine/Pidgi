@@ -130,3 +130,16 @@ describe("tender identity (no more UNDP cards collapsing into one)", () => {
     expect(sameTender({ reference: "", link: "" }, { reference: "", link: "" })).toBe("");
   });
 });
+
+describe("tender_board accepts the card in any shape", () => {
+  it("reads card as an object, a JSON string, or flat fields", async () => {
+    const { boardCardFromInput } = await import("../tendi/notion-board.js");
+    const name = "UNDP Bosnia · Capacity Building Programmes & Trainings for Startups";
+    expect(boardCardFromInput({ action: "add", card: { name } }).name).toBe(name);
+    expect(boardCardFromInput({ action: "add", card: JSON.stringify({ name, reference: "UNDP-BIH-01687" }) }).reference).toBe("UNDP-BIH-01687");
+    const flat = boardCardFromInput({ action: "add", name, link: "https://procurement-notices.undp.org/view_negotiation.cfm?nego_id=50919" });
+    expect(flat.name).toBe(name);
+    expect(flat.action).toBeUndefined();
+    expect(boardCardFromInput({ action: "add", card: "not json" })).toEqual({});
+  });
+});
