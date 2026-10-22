@@ -58,7 +58,7 @@ import { downloadPdf, exportArgs, pickDownloadUrl } from "./canva-export.js";
 import { canvaDocFill, canvaDocMap, type CanvaConn } from "./canva-doc.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
 import { startScoutService, scoutConfig } from "./scout/service.js";
-import { boardConfigNote, boardEnabled, findCards, listCards, scoutStartProposal, scoutThumbsUp, updateCard, upsertCard, STAGES, SOURCES, FITS, PLAYBOOKS, OUTCOMES, ADDED_BY } from "./notion-board.js";
+import { boardConfigNote, boardEnabled, findCards, findSameTender, listCards, scoutStartProposal, scoutThumbsUp, updateCard, upsertCard, STAGES, SOURCES, FITS, PLAYBOOKS, OUTCOMES, ADDED_BY } from "./notion-board.js";
 import { scoutDigestBlock, scoutItemBlock } from "./scout/handoff.js";
 import { itemsForDigest, type SeenRecord } from "./scout/store.js";
 
@@ -287,7 +287,7 @@ async function main(): Promise<void> {
     {
       name: "tender_board",
       description:
-        "The Tender Board in Notion (kanban: Relevant → Considered → Work in progress → Submitted → Won / Lost / Dropped). action 'find' looks a card up by reference, link or name; 'list' shows a column; 'add' creates or updates a card (same reference or link = same tender); 'update' changes fields on one card (by page_id, or by reference/link/name when unambiguous). Use it when Niels, Jonas or Bertille ask to add, move, assign, close or annotate a tender: 'add the Oxfam tender', 'move Ipas to submitted', 'mark GIZ 10032371 as lost, lesson: price', 'owner Jonas'. Only pass fields the person gave or that are in this thread; never invent a deadline or value. Dates are YYYY-MM-DD. owner_emails are peaknine.studio addresses (Niels, Jonas, Bertille...). Writes are gated to the allowlist. Answer with the card link.",
+        "The Tender Board in Notion (kanban: Relevant → Considered → Work in progress → Submitted → Won / Lost / Dropped). action 'find' looks a card up by reference, link or name; 'list' shows a column; 'add' creates a card, or updates the existing card when the reference or the full link (query string included) is exactly the same; the result says which card it matched and why; 'update' changes fields on one card (by page_id, or by reference/link/name when unambiguous). Use it when Niels, Jonas or Bertille ask to add, move, assign, close or annotate a tender: 'add the Oxfam tender', 'move Ipas to submitted', 'mark GIZ 10032371 as lost, lesson: price', 'owner Jonas'. Only pass fields the person gave or that are in this thread; never invent a deadline or value. Dates are YYYY-MM-DD. owner_emails are peaknine.studio addresses (Niels, Jonas, Bertille...). Writes are gated to the allowlist. Answer with the card link.",
       input_schema: {
         type: "object",
         properties: {
@@ -468,7 +468,8 @@ async function main(): Promise<void> {
         if (action === "add") {
           if (!card?.name) return { isError: true, text: "add needs card.name (Buyer · short title)." };
           const r = await upsertCard(card);
-          return { isError: false, text: JSON.stringify({ [r.action]: true, card: r.card, notes: r.notes, say: `Card ${r.action}: ${r.card.url}` }) };
+          const say = r.action === "updated" ? `Existing card updated (${r.match}): ${r.card.url}` : `Card created: ${r.card.url}`;
+          return { isError: false, text: JSON.stringify({ [r.action]: true, match: r.match, card: r.card, notes: r.notes, say }) };
         }
         if (action === "update") {
           let pageId = String(input?.page_id || "").trim();
@@ -476,8 +477,9 @@ async function main(): Promise<void> {
             const q = String(input?.query || card?.reference || card?.link || card?.name || "").trim();
             if (!q) return { isError: true, text: "update needs page_id, or a query that matches exactly one card." };
             const isUrl = /^https?:\/\//i.test(q);
-            let cards = isUrl ? await findCards({ link: q }, 5) : await findCards({ reference: q }, 5);
-            if (!cards.length) cards = await findCards({ name: q }, 5);
+            const exact = await findSameTender(isUrl ? { link: q } : { reference: q });
+            let cards = exact ? [exact.card] : [];
+            if (!cards.length && !isUrl) cards = await findCards({ name: q }, 5);
             if (cards.length !== 1) return { isError: true, text: `${cards.length} cards match "${q}"; pass page_id. Matches: ${cards.map((c) => `${c.name} (${c.id})`).join("; ") || "none"}` };
             pageId = cards[0].id;
           }

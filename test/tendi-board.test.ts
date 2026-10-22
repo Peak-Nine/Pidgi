@@ -105,3 +105,28 @@ describe("notion-board", () => {
     expect(notes).toEqual([]);
   });
 });
+
+describe("tender identity (no more UNDP cards collapsing into one)", () => {
+  it("keeps the query string: two UNDP notices are two tenders", async () => {
+    const { normLink, sameTender } = await import("../tendi/notion-board.js");
+    const georgia = "https://procurement-notices.undp.org/view_negotiation.cfm?nego_id=50844";
+    const bosnia = "https://procurement-notices.undp.org/view_negotiation.cfm?nego_id=50919";
+    expect(normLink(georgia)).not.toBe(normLink(bosnia));
+    expect(sameTender({ link: georgia, reference: "UNDP-GEO-00512" }, { link: bosnia, reference: "UNDP-BIH-01687" })).toBe("");
+  });
+
+  it("treats cosmetic link differences as the same notice", async () => {
+    const { normLink, sameTender } = await import("../tendi/notion-board.js");
+    const a = "https://procurement-notices.undp.org/view_negotiation.cfm?nego_id=50844";
+    const b = "procurement-notices.undp.org/view_negotiation.cfm/?nego_id=50844&utm_source=x&_gl=abc";
+    expect(normLink(a)).toBe(normLink(b));
+    expect(sameTender({ link: a }, { link: b })).toBe("same link");
+  });
+
+  it("matches on the exact reference only, never on a reference that merely contains it", async () => {
+    const { sameTender } = await import("../tendi/notion-board.js");
+    expect(sameTender({ reference: "UNDP-GEO-00512" }, { reference: " undp-geo-00512 " })).toBe("same reference");
+    expect(sameTender({ reference: "UNDP-GEO-005121" }, { reference: "UNDP-GEO-00512" })).toBe("");
+    expect(sameTender({ reference: "", link: "" }, { reference: "", link: "" })).toBe("");
+  });
+});

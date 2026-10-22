@@ -201,10 +201,84 @@ export async function toProperties(c: CardInput): Promise<{ properties: Record<s
 
 // ── queries ──────────────────────────────────────────────────────────────────
 
+// ── tender identity ──────────────────────────────────────────────────────────
+//
+// Two cards are the same tender only when the reference is exactly the same, or the
+// link points at exactly the same notice. The query string is part of the identity:
+// every UNDP notice lives at procurement-notices.undp.org/view_negotiation.cfm and
+// only ?nego_id=... tells them apart. (The first version cut the query string off,
+// so every new UNDP card was matched to the first UNDP card and overwrote it.)
+
+const TRACKING_PARAMS = /^(utm_[a-z]+|_gl|gclid|fbclid|source|ref_src)$/i;
+
+/** Canonical form of a tender link: no protocol, no www, lower-case host, no trailing slash, no tracking params, params sorted. */
+export function normLink(u?: string): string {
+  const raw = String(u || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    const params = [...url.searchParams.entries()].filter(([k]) => !TRACKING_PARAMS.test(k)).sort(([a], [b]) => a.localeCompare(b));
+    const qs = params.map(([k, v]) => `${k.toLowerCase()}=${v}`).join("&");
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    const path = url.pathname.replace(/\/+$/, "");
+    return `${host}${path}${qs ? `?${qs}` : ""}`;
+  } catch {
+    return raw.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
+  }
+}
+
+/** Canonical form of a reference: trimmed, lower-case, single spaces. */
+export function normRef(r?: string): string {
+  return String(r || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** How a card matches a tender, or "" when it is a different tender. */
+export function sameTender(card: { reference?: string; link?: string }, want: { reference?: string; link?: string }): "" | "same reference" | "same link" {
+  const wr = normRef(want.reference);
+  if (wr && normRef(card.reference) === wr) return "same reference";
+  const wl = normLink(want.link);
+  if (wl && normLink(card.link) === wl) return "same link";
+  return "";
+}
+
+/**
+ * The card for this exact tender, if there is one. Notion's filters only narrow the
+ * candidates (contains, case-insensitive); the decision is made by sameTender().
+ */
+export async function findSameTender(want: { reference?: string; link?: string }): Promise<{ card: CardSummary; match: string } | undefined> {
+  const or: any[] = [];
+  if (want.reference && want.reference.trim()) or.push({ property: "Reference", rich_text: { contains: want.reference.trim() } });
+  const nl = normLink(want.link);
+  if (nl) {
+    // Narrow on the most specific piece of the link: the query string if there is one, else host + path.
+    const q = nl.includes("?") ? nl.split("?")[1].split("&")[0] : nl;
+    or.push({ property: "Link", url: { contains: q.slice(0, 100) } });
+  }
+  if (!or.length) return undefined;
+  let cursor: string | undefined;
+  for (let page = 0; page < 5; page++) {
+    const r: any = await (client() as any).databases.query({
+      database_id: dbId(),
+      page_size: 100,
+      filter: or.length === 1 ? or[0] : { or },
+      ...(cursor ? { start_cursor: cursor } : {}),
+    });
+    for (const p of r.results || []) {
+      const card = summarize(p);
+      const match = sameTender(card, want);
+      if (match) return { card, match };
+    }
+    if (!r.has_more) break;
+    cursor = r.next_cursor;
+  }
+  return undefined;
+}
+
+/** Loose search for people ("find GIZ", a pasted link). Never used to decide that two tenders are the same. */
 export async function findCards(query: { reference?: string; link?: string; name?: string }, limit = 5): Promise<CardSummary[]> {
   const or: any[] = [];
   if (query.reference) or.push({ property: "Reference", rich_text: { contains: query.reference } });
-  if (query.link) or.push({ property: "Link", url: { contains: query.link.replace(/^https?:\/\//, "").split("?")[0].slice(0, 80) } });
+  if (query.link) or.push({ property: "Link", url: { contains: (normLink(query.link).split("?")[1] || normLink(query.link)).slice(0, 100) } });
   if (query.name) or.push({ property: "Name", title: { contains: query.name } });
   const r: any = await (client() as any).databases.query({
     database_id: dbId(),
@@ -257,13 +331,11 @@ export async function updateCard(pageId: string, c: CardInput): Promise<{ card: 
  * Create or update by identity: a card with the same Reference, or the same Link,
  * is the same tender. Returns what happened so the caller can say it plainly.
  */
-export async function upsertCard(c: CardInput): Promise<{ action: "created" | "updated"; card: CardSummary; notes: string[] }> {
-  let existing: CardSummary | undefined;
-  if (c.reference) existing = (await findCards({ reference: c.reference }, 1))[0];
-  if (!existing && c.link) existing = (await findCards({ link: c.link }, 1))[0];
-  if (existing) {
-    const r = await updateCard(existing.id, c);
-    return { action: "updated", ...r };
+export async function upsertCard(c: CardInput): Promise<{ action: "created" | "updated"; card: CardSummary; notes: string[]; match?: string }> {
+  const hit = await findSameTender({ reference: c.reference, link: c.link });
+  if (hit) {
+    const r = await updateCard(hit.card.id, c);
+    return { action: "updated", match: `${hit.match} as "${hit.card.name}"`, ...r };
   }
   const r = await createCard(c);
   return { action: "created", ...r };
@@ -322,7 +394,7 @@ export function cardFromScout(r: ScoutRecordLike, stage: Stage): CardInput {
 /** 👍 on a digest item: the card appears in Relevant (or is refreshed if it exists). Never moves a card backwards. */
 export async function scoutThumbsUp(r: ScoutRecordLike): Promise<{ action: string; url: string }> {
   const c = cardFromScout(r, "Relevant");
-  const existing = (await findCards({ reference: c.reference }, 1))[0] || (await findCards({ link: c.link }, 1))[0];
+  const existing = (await findSameTender({ reference: c.reference, link: c.link }))?.card;
   if (existing) {
     const { stage: _s, ...rest } = c;
     const r2 = await updateCard(existing.id, rest);
@@ -338,7 +410,7 @@ const ORDER: Stage[] = ["Relevant", "Considered", "Work in progress", "Submitted
 export async function scoutStartProposal(r: ScoutRecordLike, ownerEmail?: string): Promise<{ action: string; url: string }> {
   const c = cardFromScout(r, "Work in progress");
   if (ownerEmail) c.owner_emails = [ownerEmail];
-  const existing = (await findCards({ reference: c.reference }, 1))[0] || (await findCards({ link: c.link }, 1))[0];
+  const existing = (await findSameTender({ reference: c.reference, link: c.link }))?.card;
   if (existing) {
     const further = ORDER.indexOf(existing.stage as Stage) > ORDER.indexOf("Work in progress");
     const { stage, ...rest } = c;
