@@ -104,6 +104,8 @@ export interface TaskBoard {
   restrictedTo?: string[];
   /** Other Notion pages/databases that only `restrictedTo` may read through Pidgi (the rest of a private meeting page). */
   privateIds?: string[];
+  /** Anyone may put items on it through a draft card; reading it stays limited to `restrictedTo`. */
+  openForAdding?: boolean;
   /** Words that name this private board. Anyone else who uses them gets PRIVATE_REPLY, and they are kept out of answers to them. */
   secretWords?: string[];
 }
@@ -156,7 +158,20 @@ export const DEFAULT_BOARDS: TaskBoard[] = [
     name: "Touchdown",
     label: "Touchdown agenda",
     description: "Agenda of the weekly Touchdown, the one-on-one between Niels and Jonas (the two founders). Topics for the two of them to discuss.",
-    aliases: ["touchdown", "touchdown agenda", "one-on-one", "1:1", "founders meeting"],
+    aliases: [
+      "touchdown",
+      "touchdown agenda",
+      "one-on-one",
+      "1:1",
+      "1-on-1",
+      "een-op-een",
+      "jonas and niels' 1:1",
+      "niels and jonas' 1:1",
+      "jonas x niels",
+      "the 1:1 of jonas and niels",
+      "founders meeting",
+      "founders' meeting",
+    ],
     // 🏈 Touchdown → ✨ Agenda
     databaseId: "2d5c675ff9588011ac09cd22663b3c68",
     boardUrl: "https://www.notion.so/2d5c675ff958800f919aea617356cc23",
@@ -167,7 +182,9 @@ export const DEFAULT_BOARDS: TaskBoard[] = [
       status: { prop: "Status", type: "status", value: "Not started" },
       assignee: "Assignee",
     },
+    // The team may add topics; only Niels and Jonas can read the agenda.
     restrictedTo: ["niels@peaknine.studio", "jonas@peaknine.studio"],
+    openForAdding: true,
     privateIds: [
       "2d5c675ff958800f919aea617356cc23", // the Touchdown page
       "2d5c675ff95880ea8b24000b16fcf8e5", // ⚡ Agenda data source
@@ -256,6 +273,7 @@ export function loadBoards(env: Record<string, string | undefined> = process.env
         fields: b.fields && b.fields.title ? b.fields : PERSON_FIELDS,
         restrictedTo: Array.isArray(b.restrictedTo) ? b.restrictedTo.map((e: any) => String(e).toLowerCase()) : undefined,
         privateIds: Array.isArray(b.privateIds) ? b.privateIds.map((i: any) => normId(String(i))) : undefined,
+        openForAdding: b.openForAdding === true || undefined,
         secretWords: Array.isArray(b.secretWords) ? b.secretWords.map((w: any) => String(w).toLowerCase()) : undefined,
       });
     }
@@ -282,9 +300,19 @@ export function canUseBoard(board: TaskBoard, email: string | null | undefined):
   return !!email && board.restrictedTo.includes(String(email).toLowerCase());
 }
 
-/** The boards this person may use. */
+/** The boards this person may use (read and add to). */
 export function boardsFor(email: string | null | undefined, boards: TaskBoard[] = loadBoards()): TaskBoard[] {
   return boards.filter((b) => canUseBoard(b, email));
+}
+
+/** May this person put an item on the board? Also true for an open-for-adding board they can't read. */
+export function canAddTo(board: TaskBoard, email: string | null | undefined): boolean {
+  return canUseBoard(board, email) || !!board.openForAdding;
+}
+
+/** The boards this person may add items to. */
+export function addableBoardsFor(email: string | null | undefined, boards: TaskBoard[] = loadBoards()): TaskBoard[] {
+  return boards.filter((b) => canAddTo(b, email));
 }
 
 /** Notion ids this person must not read or change through Pidgi's general Notion tools. */
@@ -307,19 +335,26 @@ export function isRestrictedBoard(board: TaskBoard | undefined): boolean {
   return !!board?.restrictedTo?.length;
 }
 
-function secretWordsFor(email: string | null | undefined, boards: TaskBoard[]): string[] {
-  return boards.filter((b) => !canUseBoard(b, email)).flatMap((b) => b.secretWords || []);
+/** exceptAddable: leave out boards this person may still add to (naming those is fine when adding). */
+interface HiddenOpts {
+  exceptAddable?: boolean;
 }
 
-/** Does this text name a private board this person may not use? */
-export function mentionsHiddenBoard(text: string, email: string | null | undefined, boards: TaskBoard[] = loadBoards()): boolean {
+function secretWordsFor(email: string | null | undefined, boards: TaskBoard[], opts: HiddenOpts = {}): string[] {
+  return boards
+    .filter((b) => !canUseBoard(b, email) && !(opts.exceptAddable && canAddTo(b, email)))
+    .flatMap((b) => b.secretWords || []);
+}
+
+/** Does this text name a private board this person may not read? */
+export function mentionsHiddenBoard(text: string, email: string | null | undefined, boards: TaskBoard[] = loadBoards(), opts: HiddenOpts = {}): boolean {
   const t = String(text || "").toLowerCase();
-  return secretWordsFor(email, boards).some((w) => new RegExp(`(^|[^a-z])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i").test(t));
+  return secretWordsFor(email, boards, opts).some((w) => new RegExp(`(^|[^a-z])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i").test(t));
 }
 
 /** Last line of defence on anything Pidgi says: an answer that names a hidden board becomes PRIVATE_REPLY. */
-export function scrubPrivate(text: string, email: string | null | undefined, boards: TaskBoard[] = loadBoards()): string {
-  return mentionsHiddenBoard(text, email, boards) ? PRIVATE_REPLY : text;
+export function scrubPrivate(text: string, email: string | null | undefined, boards: TaskBoard[] = loadBoards(), opts: HiddenOpts = {}): string {
+  return mentionsHiddenBoard(text, email, boards, opts) ? PRIVATE_REPLY : text;
 }
 
 // ── Trigger ─────────────────────────────────────────────────────────────────
@@ -333,7 +368,7 @@ export function scrubPrivate(text: string, email: string | null | undefined, boa
  */
 export function looksLikeTaskRequest(text: string): boolean {
   const t = String(text || "");
-  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|touchdown|mothership|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
+  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|touchdown|mothership|(?<![0-9])1[:-]1(?![0-9])|1-on-1|one[- ]on[- ]one|(een|één)[- ]op[- ](een|één)|founders'? ?(meeting|overleg)|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
   return /(^|[^a-z])(on|onto|to|op|for|voor|naar)\s+(the\s+|de\s+|het\s+|our\s+|onze\s+)?(?!my\s|mijn\s)([a-z-]+\s+)?agenda([^a-z]|$)/i.test(t);
 }
 
@@ -817,7 +852,10 @@ export function doneBlocks(args: {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `✅ *Added to ${esc(args.boardLabel).replace(/^(the )?(.*)$/, (_m, the, rest) => `${the || ""}<${args.boardUrl}|${rest}>`)}* by <@${args.byUserId}>\n<${args.pageUrl}|${esc(args.title)}>`,
+        // No links when the person can't open the board anyway (an open-for-adding board).
+        text: args.boardUrl
+          ? `✅ *Added to ${esc(args.boardLabel).replace(/^(the )?(.*)$/, (_m, the, rest) => `${the || ""}<${args.boardUrl}|${rest}>`)}* by <@${args.byUserId}>\n<${args.pageUrl}|${esc(args.title)}>`
+          : `✅ *Added to ${esc(args.boardLabel)}* by <@${args.byUserId}>\n${esc(args.title)}`,
       },
     },
     { type: "context", elements: [{ type: "mrkdwn", text: meta.join("  ·  ") }] },

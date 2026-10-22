@@ -17,6 +17,7 @@ import {
   loadBoards,
   looksLikeTaskRequest,
   mentionsHiddenBoard,
+  addableBoardsFor,
   notionProperties,
   PRIVATE_REPLY,
   restrictedNotionIds,
@@ -52,6 +53,11 @@ describe("looksLikeTaskRequest", () => {
       "zet dit op het bord van Sankhya",
       "put this on Sankhya's board",
       "zet dit op mijn mothership",
+      "put this on Jonas and Niels' 1:1",
+      "can you add this to the 1-on-1 of Niels and Jonas",
+      "add it to their one on one",
+      "zet dit op de één-op-één van Jonas en Niels",
+      "for the founders' meeting please",
     ]) {
       expect(looksLikeTaskRequest(t), t).toBe(true);
     }
@@ -66,6 +72,8 @@ describe("looksLikeTaskRequest", () => {
       "check my agenda for Friday",
       "show me the finance dashboard",
       "onboarding for the new intern",
+      "schedule a meeting at 11:15",
+      "the ratio is 1:10",
     ]) {
       expect(looksLikeTaskRequest(t), t).toBe(false);
     }
@@ -276,6 +284,14 @@ describe("access to private boards", () => {
     expect(mentionsHiddenBoard("show me Niels's mothership", "niels@peaknine.studio")).toBe(false);
     expect(mentionsHiddenBoard("plan the poster with Laura", "")).toBe(false);
     expect(mentionsHiddenBoard("mothershipping", "")).toBe(false);
+  });
+  it("lets the whole team add to Touchdown, but not read it", () => {
+    expect(addableBoardsFor("laura@peaknine.studio").map((b) => b.key)).toEqual(["laura", "sankhya", "touchdown", "team"]);
+    expect(boardsFor("laura@peaknine.studio").map((b) => b.key)).not.toContain("touchdown");
+    expect(hiddenNotionIds("laura@peaknine.studio")).toContain("2d5c675ff9588011ac09cd22663b3c68");
+    expect(mentionsHiddenBoard("put this on the touchdown", "laura@peaknine.studio", undefined, { exceptAddable: true })).toBe(false);
+    expect(mentionsHiddenBoard("put this on the mothership", "laura@peaknine.studio", undefined, { exceptAddable: true })).toBe(true);
+    expect(mentionsHiddenBoard("what's on the touchdown?", "laura@peaknine.studio")).toBe(true);
   });
   it("turns an answer that names a hidden board into the neutral line", () => {
     expect(scrubPrivate("Your Touchdown agenda has 3 items.", "laura@peaknine.studio")).toBe(PRIVATE_REPLY);

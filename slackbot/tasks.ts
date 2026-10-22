@@ -30,7 +30,8 @@ import {
   applyFieldState,
   boardOf,
   boardRef,
-  boardsFor,
+  addableBoardsFor,
+  canAddTo,
   calendarLines,
   canUseBoard,
   decodeDraft,
@@ -138,7 +139,7 @@ async function projectOptionsByBoard(boards: TaskBoard[]): Promise<Record<string
  */
 function shownBoards(boards: TaskBoard[], channel: string, currentKey?: string): TaskBoard[] {
   if (/^D/.test(String(channel || ""))) return boards;
-  return boards.filter((b) => !isRestrictedBoard(b) || b.key === currentKey);
+  return boards.filter((b) => !isRestrictedBoard(b) || b.openForAdding || b.key === currentKey);
 }
 
 function slackError(e: any): string {
@@ -265,7 +266,7 @@ You receive the request (the message that tagged the bot), who asked, the boards
 
 When it is a task request, write items with these rules:
 - Only use what is in the request and the conversation. Never invent scope, people, dates, numbers, links or reasons. If something is unclear, leave it out rather than guess.
-- board: the key of the board the requester points to. "for Laura" means Laura's board; "touchdown", "our one-on-one" means the Touchdown board; "team meeting", "sync", "talking point" means the team board. "for me"/"voor mij" means the requester's own board if they have one. If the requester names a person or meeting that has no board in the list, use "unknown". Never pick a board that isn't in the list.
+- board: the key of the board the requester points to. "for Laura" means Laura's board; "touchdown", "our one-on-one", "the 1:1", "Jonas and Niels' 1:1", "Jonas x Niels", "the founders' meeting" means the Touchdown board (when Jonas and Niels are named together like this, it is always Touchdown, never one person's own board); "team meeting", "sync", "talking point" means the team board. "for me"/"voor mij" means the requester's own board if they have one. If the requester names a person or meeting that has no board in the list, use "unknown". Never pick a board that isn't in the list.
 - Usually one item. Split into several only when the requester asks for several or the conversation holds clearly separate items. At most 5.
 - title: in the language the requester wrote in, at most 80 characters. On a person's board: a short concrete action that starts with a verb. On a meeting board: the topic to discuss, phrased so it is clear in the meeting a week later.
 - context: one to four plain sentences. For a task: what to deliver, for whom or why, any constraint or reference mentioned. For a meeting topic: what needs discussing or deciding and why it came up. Same language as the title. Warm and direct, no jargon, no buzzwords, no em dashes, no "it's not X, it's Y" phrasing.
@@ -371,8 +372,9 @@ export function taskCaptureEnabled(): boolean {
  */
 export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent, replyThreadTs?: string): Promise<CaptureResult> {
   const requester = await person(client, ev.user);
-  // Naming a private board you're not part of gets the same neutral line, before anything else runs.
-  if (mentionsHiddenBoard(ev.text, requester.email, BOARDS)) {
+  // Naming a private board you're not part of gets the same neutral line, before anything else runs
+  // (except a board anyone may add to, like Touchdown: asking a question about it is refused below).
+  if (mentionsHiddenBoard(ev.text, requester.email, BOARDS, { exceptAddable: true })) {
     await client.chat.postMessage({ channel: ev.channel, thread_ts: replyThreadTs, text: PRIVATE_REPLY });
     return { kind: "handled", summary: PRIVATE_REPLY, private: true };
   }
@@ -384,7 +386,7 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
     /* carry on without a placeholder */
   }
   const say = async (raw: string, blocks?: any[]) => {
-    const text = scrubPrivate(raw, requester.email, BOARDS);
+    const text = scrubPrivate(raw, requester.email, BOARDS, { exceptAddable: true });
     if (text !== raw) blocks = undefined;
     if (ack) {
       try {
@@ -415,7 +417,7 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
   }
 
   const today = todayBrussels();
-  const boards = boardsFor(requester.email, BOARDS);
+  const boards = addableBoardsFor(requester.email, BOARDS);
   const projects = await projectOptionsByBoard(boards);
 
   let raw: any;
@@ -432,6 +434,11 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
   }
 
   const result = validateDistilled(raw, { boards, projectOptions: projects, team: TEAM, sourceText: g.sourceText, today });
+  if (!result.isTaskRequest && mentionsHiddenBoard(ev.text, requester.email, BOARDS)) {
+    // A question about a board they may add to but not read (e.g. "what's on the Touchdown agenda?").
+    await say(PRIVATE_REPLY);
+    return { kind: "handled", summary: PRIVATE_REPLY, private: true };
+  }
   if (!result.isTaskRequest) {
     // A question about tasks: hand the placeholder back to Pidgi's normal brain.
     return { kind: "not_task", ack };
@@ -504,7 +511,7 @@ function where(body: any): { channel: string; ts: string } {
 /** Redraw a card for a draft, with the boards its requester may use. */
 async function redraw(client: any, at: { channel: string; ts: string }, d: DraftPayload): Promise<void> {
   const requester = await person(client, d.q);
-  const boards = boardsFor(requester.email, BOARDS);
+  const boards = addableBoardsFor(requester.email, BOARDS);
   if (!boardOf(boards, d.a) && boards.length) d.a = boards[0].key;
   const board = boardOf(boards, d.a);
   const options = await projectOptions(board);
@@ -555,7 +562,8 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
       const board = boardOf(BOARDS, d.a);
       if (!board) return ephemeral(client, body, "Pick which board this goes to first.");
       const clicker = await person(client, userId);
-      if (!canUseBoard(board, clicker.email)) return ephemeral(client, body, PRIVATE_REPLY);
+      if (!canAddTo(board, clicker.email)) return ephemeral(client, body, PRIVATE_REPLY);
+      const canRead = canUseBoard(board, clicker.email);
 
       const notes: string[] = [];
       let project = board.fields.project ? d.p : null;
@@ -605,9 +613,9 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
         text: `Added to ${boardRef(board)}: ${d.t}`,
         blocks: doneBlocks({
           boardLabel: boardRef(board),
-          boardUrl: board.boardUrl,
+          boardUrl: canRead ? board.boardUrl : "",
           title: d.t,
-          pageUrl: page?.url || board.boardUrl,
+          pageUrl: canRead ? page?.url || board.boardUrl : "",
           byUserId: userId,
           deadline: board.fields.deadline ? d.d : null,
           project,

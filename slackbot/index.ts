@@ -1232,8 +1232,14 @@ async function main(): Promise<void> {
     }
     // Someone naming a private board they're not part of gets one neutral line, and the
     // question never reaches the model or the memory.
+    // Touchdown is the exception: anyone may ask to ADD to it, which task capture handles (and
+    // a question about it is refused there too).
     const asker = await resolveIdentity(slackUserId);
-    if (mentionsHiddenBoard(cleaned, asker?.email || "")) {
+    const askerEmail = asker?.email || "";
+    if (
+      mentionsHiddenBoard(cleaned, askerEmail, undefined, { exceptAddable: true }) ||
+      (mentionsHiddenBoard(cleaned, askerEmail) && !(ev && taskDeps && looksLikeTaskRequest(cleaned)))
+    ) {
       await say({ text: PRIVATE_REPLY, thread_ts: replyThreadTs });
       return;
     }

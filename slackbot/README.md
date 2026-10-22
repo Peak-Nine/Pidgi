@@ -119,7 +119,10 @@ Who fills which person column:
 
 Who can click: the person who asked, plus anyone on `SLACK_WRITE_ALLOWLIST` (everyone if that list is empty).
 
-**Private boards.** The Touchdown agenda (and the rest of the Touchdown page) is Niels and Jonas only.
+**Private boards.** The Touchdown agenda (and the rest of the Touchdown page) can only be read by Niels
+and Jonas, but anyone on the team may put a topic on it ("put this on the touchdown"). They get the
+normal draft card and ✅ Add to board, just no link to the agenda, and a question about it ("what's on
+the touchdown?") gets the neutral line below.
 👾 Mothership (Niels's Pending Tasks) and the ♟️ Must Win Battle Board are Niels only. Say "put this on my
 mothership" to add a task there; it lands in Pending Tasks with Tags = Tasks.
 
@@ -127,7 +130,8 @@ For anyone outside a board's circle, all of this is enforced in code, not left t
 - Naming the board ("touchdown", "mothership", "must win battle", "mwb") gets one line,
   "I'm afraid my settings can't help you with that, please discuss with Niels.", before the model or
   the thread is touched. Any answer that still names such a board is replaced by that same line.
-- The board isn't offered to the model, isn't in the picker, and ✅ Add to board refuses it.
+- The board isn't offered to the model, isn't in the picker, and ✅ Add to board refuses it
+  (Touchdown excepted, since anyone may add to it).
 - Pidgi's general Notion tools hide the board and everything under it, at any depth: search leaves it
   out, child pages and databases are left out of page content, and opening, querying or editing is
   refused with the same line. When Notion can't say where a page lives (network error, rate limit),
