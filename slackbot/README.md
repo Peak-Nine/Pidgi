@@ -119,12 +119,27 @@ Who fills which person column:
 
 Who can click: the person who asked, plus anyone on `SLACK_WRITE_ALLOWLIST` (everyone if that list is empty).
 
-**The Touchdown agenda is private to Niels and Jonas.** For anyone else it isn't offered to the model,
-isn't in the board picker, and ✅ refuses it. Pidgi's general Notion tools also hide the whole Touchdown
-page (the agenda, the mental check-in, Projects and the archive) from everyone else: search leaves it out,
-and opening, querying or editing it is refused. That check looks at the item and the level above it, so
-keep private pages directly on the Touchdown page or in its databases. The draft card itself shows up in
-the thread where you tag Pidgi, so for sensitive topics tag Pidgi in a DM (paste the message link there).
+**Private boards.** The Touchdown agenda (and the rest of the Touchdown page) is Niels and Jonas only.
+👾 Mothership (Niels's Pending Tasks) and the ♟️ Must Win Battle Board are Niels only. Say "put this on my
+mothership" to add a task there; it lands in Pending Tasks with Tags = Tasks.
+
+For anyone outside a board's circle, all of this is enforced in code, not left to the model:
+- Naming the board ("touchdown", "mothership", "must win battle", "mwb") gets one line,
+  "I'm afraid my settings can't help you with that, please discuss with Niels.", before the model or
+  the thread is touched. Any answer that still names such a board is replaced by that same line.
+- The board isn't offered to the model, isn't in the picker, and ✅ Add to board refuses it.
+- Pidgi's general Notion tools hide the board and everything under it, at any depth: search leaves it
+  out, child pages and databases are left out of page content, and opening, querying or editing is
+  refused with the same line. When Notion can't say where a page lives (network error, rate limit),
+  Pidgi treats it as private.
+- A turn that touched a private board is not kept in a channel's memory (that memory is shared by
+  everyone who talks to Pidgi in the channel). In a DM it is.
+- Outside a DM, private boards are left out of the board picker and the "I can add things to…" line,
+  unless the card is for that board.
+
+What the code can't cover: a draft card or answer posted in a channel is visible to everyone in that
+channel, so use a DM with Pidgi for anything sensitive. And people who can open these pages in Notion
+itself can still see them there; Pidgi only controls what goes through Pidgi.
 
 A question about tasks ("what tasks does Laura have this week?", "what's on the Touchdown agenda?") is
 recognised as a question and goes to Pidgi's normal brain. Pidgi's general Notion tools are blocked from
@@ -141,7 +156,10 @@ Slack app (api.slack.com/apps → Pidgi):
 3. Pidgi must be a member of the channel it reads (Slack offers to invite it when you tag it).
 
 Notion: add the Pidgi integration (••• → Connections) to 🐝 Laura's Magic Work, 🧭 Sankhya's Work Board,
-the ✏️ Talking Points database on Peak Nine Syncs (Internal), and the ✨ Agenda database on Touchdown.
+the ✏️ Talking Points database on Peak Nine Syncs (Internal), the ✨ Agenda database on Touchdown, and
+👾 Mothership. Mothership has several data sources, so Pidgi writes to its Pending Tasks data source with
+the newer Notion API version (2025-09-03); everything else still uses 2022-06-28.
+If `TASK_BOARDS` is set on Render, it replaces the built-in boards, Mothership included.
 Without that, ✅ answers with a "no access" message and the draft stays.
 
 Render: nothing new is required. Optional: `TASK_MODEL`, `TASK_BOARDS`, `TASK_TEAM` (see `.env.example`).

@@ -66,8 +66,11 @@ export interface BoardFields {
   text?: string;
   deadline?: string;
   status?: { prop: string; type: "select" | "status"; value: string };
-  /** select: options are read live from Notion. */
+  /** select (or multi_select, see projectType): options are read live from Notion. */
   project?: string;
+  projectType?: "select" | "multi_select";
+  /** multi_select set on every new row, e.g. Tags = Tasks. */
+  tag?: { prop: string; value: string };
   /** people: the person who asked Pidgi. */
   requester?: string;
   /** people: who does it. On a person board that is the board's person; on a meeting board, whoever is named. */
@@ -92,6 +95,8 @@ export interface TaskBoard {
   email?: string;
   /** Notion DATABASE id (not the data source id). The Pidgi integration must be connected to it. */
   databaseId: string;
+  /** Data source id, for a database with several data sources: rows are then written there. */
+  dataSourceId?: string;
   /** Link to the board, shown in Slack. */
   boardUrl: string;
   fields: BoardFields;
@@ -99,7 +104,12 @@ export interface TaskBoard {
   restrictedTo?: string[];
   /** Other Notion pages/databases that only `restrictedTo` may read through Pidgi (the rest of a private meeting page). */
   privateIds?: string[];
+  /** Words that name this private board. Anyone else who uses them gets PRIVATE_REPLY, and they are kept out of answers to them. */
+  secretWords?: string[];
 }
+
+/** What Pidgi says to anyone outside a private board's circle. It never confirms what is behind it. */
+export const PRIVATE_REPLY = "I'm afraid my settings can't help you with that, please discuss with Niels.";
 
 /** Laura's and Sankhya's backlogs share these columns. */
 export const PERSON_FIELDS: BoardFields = {
@@ -160,10 +170,40 @@ export const DEFAULT_BOARDS: TaskBoard[] = [
     restrictedTo: ["niels@peaknine.studio", "jonas@peaknine.studio"],
     privateIds: [
       "2d5c675ff958800f919aea617356cc23", // the Touchdown page
+      "2d5c675ff95880ea8b24000b16fcf8e5", // ⚡ Agenda data source
       "2d5c675ff95880d9a06fe8671241f612", // mental check-in
       "3bfc675ff9588002817fc58860e39af1", // 🕊️ Projects
       "356c675ff95880a383acdd35ca853362", // 💤 OLD / Archive
     ],
+    secretWords: ["touchdown"],
+  },
+  {
+    key: "mothership",
+    kind: "person",
+    name: "Mothership",
+    label: "Mothership",
+    description: "Niels's own private to-do list (Pending Tasks). Only Niels uses it.",
+    aliases: ["mothership", "my mothership", "niels", "my board", "my todos", "my to-dos", "my list"],
+    email: "niels@peaknine.studio",
+    // 👾 Mothership → Pending Tasks. The database also shows the Touchdown agenda and the
+    // Must Win Battle Board, so rows are written to the Pending Tasks data source itself.
+    databaseId: "2d3c675ff95880428289ccdb7612c52d",
+    dataSourceId: "2d3c675ff9588031805c000b7f320c36",
+    boardUrl: "https://www.notion.so/2d3c675ff95880428289ccdb7612c52d",
+    fields: {
+      title: "Task",
+      deadline: "Due Date",
+      project: "Project",
+      projectType: "multi_select",
+      tag: { prop: "Tags", value: "Tasks" },
+    },
+    restrictedTo: ["niels@peaknine.studio"],
+    privateIds: [
+      "2d3c675ff9588031805c000b7f320c36", // Pending Tasks data source
+      "2d5c675ff95880c1ba91cb520bc70bde", // ♟️ Must Win Battle Board (on Strategy)
+      "2d5c675ff9588051bdae000b4dd1d23e", // its data source
+    ],
+    secretWords: ["mothership", "must win battle", "mwb"],
   },
   {
     key: "team",
@@ -211,10 +251,12 @@ export function loadBoards(env: Record<string, string | undefined> = process.env
         aliases: Array.isArray(b.aliases) ? b.aliases.map((a: any) => String(a).toLowerCase()) : [key],
         email: b.email ? String(b.email).toLowerCase() : undefined,
         databaseId: normId(String(b.databaseId)),
+        dataSourceId: b.dataSourceId ? normId(String(b.dataSourceId)) : undefined,
         boardUrl: String(b.boardUrl || `https://www.notion.so/${normId(String(b.databaseId))}`),
         fields: b.fields && b.fields.title ? b.fields : PERSON_FIELDS,
         restrictedTo: Array.isArray(b.restrictedTo) ? b.restrictedTo.map((e: any) => String(e).toLowerCase()) : undefined,
         privateIds: Array.isArray(b.privateIds) ? b.privateIds.map((i: any) => normId(String(i))) : undefined,
+        secretWords: Array.isArray(b.secretWords) ? b.secretWords.map((w: any) => String(w).toLowerCase()) : undefined,
       });
     }
     return out.length ? out : DEFAULT_BOARDS;
@@ -255,6 +297,31 @@ export function hiddenNotionIds(email: string | null | undefined, boards: TaskBo
   return out;
 }
 
+/** Every Notion id behind a restricted board, whoever asks (to keep private turns out of shared memory). */
+export function restrictedNotionIds(boards: TaskBoard[] = loadBoards()): string[] {
+  return boards.filter((b) => b.restrictedTo?.length).flatMap((b) => [b.databaseId, b.dataSourceId || "", ...(b.privateIds || [])].filter(Boolean).map(normId));
+}
+
+/** True when a board is restricted (only some people may use it). */
+export function isRestrictedBoard(board: TaskBoard | undefined): boolean {
+  return !!board?.restrictedTo?.length;
+}
+
+function secretWordsFor(email: string | null | undefined, boards: TaskBoard[]): string[] {
+  return boards.filter((b) => !canUseBoard(b, email)).flatMap((b) => b.secretWords || []);
+}
+
+/** Does this text name a private board this person may not use? */
+export function mentionsHiddenBoard(text: string, email: string | null | undefined, boards: TaskBoard[] = loadBoards()): boolean {
+  const t = String(text || "").toLowerCase();
+  return secretWordsFor(email, boards).some((w) => new RegExp(`(^|[^a-z])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i").test(t));
+}
+
+/** Last line of defence on anything Pidgi says: an answer that names a hidden board becomes PRIVATE_REPLY. */
+export function scrubPrivate(text: string, email: string | null | undefined, boards: TaskBoard[] = loadBoards()): string {
+  return mentionsHiddenBoard(text, email, boards) ? PRIVATE_REPLY : text;
+}
+
 // ── Trigger ─────────────────────────────────────────────────────────────────
 
 /**
@@ -266,7 +333,7 @@ export function hiddenNotionIds(email: string | null | undefined, boards: TaskBo
  */
 export function looksLikeTaskRequest(text: string): boolean {
   const t = String(text || "");
-  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|touchdown|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
+  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|touchdown|mothership|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
   return /(^|[^a-z])(on|onto|to|op|for|voor|naar)\s+(the\s+|de\s+|het\s+|our\s+|onze\s+)?(?!my\s|mijn\s)([a-z-]+\s+)?agenda([^a-z]|$)/i.test(t);
 }
 
@@ -865,7 +932,8 @@ export function notionProperties(
     if (res.length) props[p.resources] = { rich_text: res };
   }
   if (p.deadline && f.deadline) props[p.deadline] = { date: { start: f.deadline } };
-  if (p.project && f.project) props[p.project] = { select: { name: f.project } };
+  if (p.project && f.project) props[p.project] = p.projectType === "multi_select" ? { multi_select: [{ name: f.project }] } : { select: { name: f.project } };
+  if (p.tag) props[p.tag.prop] = { multi_select: [{ name: p.tag.value }] };
   if (p.requester && f.requesterNotionId) props[p.requester] = { people: [{ id: f.requesterNotionId }] };
   if (p.assignee && f.assigneeNotionId) props[p.assignee] = { people: [{ id: f.assigneeNotionId }] };
   return props;

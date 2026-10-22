@@ -16,7 +16,11 @@ import {
   isoWeek,
   loadBoards,
   looksLikeTaskRequest,
+  mentionsHiddenBoard,
   notionProperties,
+  PRIVATE_REPLY,
+  restrictedNotionIds,
+  scrubPrivate,
   parseSlackPermalinks,
   readFieldState,
   slackToPlain,
@@ -47,6 +51,7 @@ describe("looksLikeTaskRequest", () => {
       "add to Laura's board that she could polish our Linkedin Services pages - deadline 30/10",
       "zet dit op het bord van Sankhya",
       "put this on Sankhya's board",
+      "zet dit op mijn mothership",
     ]) {
       expect(looksLikeTaskRequest(t), t).toBe(true);
     }
@@ -200,7 +205,7 @@ describe("draft card", () => {
     const blocks = draftBlocks(draft(), { boards: DEFAULT_BOARDS, projectOptions: PROJECTS });
     const fields = blocks.find((b) => b.block_id === "p9task_fields");
     expect(fields.elements.map((e: any) => e.action_id)).toEqual(["p9task_owner", "p9task_deadline", "p9task_project"]);
-    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "touchdown", "team"]);
+    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "touchdown", "mothership", "team"]);
     expect(fields.elements[0].initial_option.value).toBe("laura");
     expect(fields.elements[1].initial_date).toBe("2026-10-23");
     expect(fields.elements[2].initial_option.value).toBe("Marketing");
@@ -253,6 +258,30 @@ describe("access to private boards", () => {
     expect(hidden).toContain("2d5c675ff95880d9a06fe8671241f612"); // mental check-in
     expect(hidden).not.toContain("3f9c675ff95880aeb5fdff8f398a60b4"); // team talking points stay open
   });
+  it("Mothership and the Must Win Battle Board are Niels only, Jonas included", () => {
+    expect(boardsFor("niels@peaknine.studio").map((b) => b.key)).toContain("mothership");
+    expect(boardsFor("jonas@peaknine.studio").map((b) => b.key)).not.toContain("mothership");
+    const jonas = hiddenNotionIds("jonas@peaknine.studio");
+    expect(jonas).toContain("2d3c675ff95880428289ccdb7612c52d"); // 👾 Mothership
+    expect(jonas).toContain("2d3c675ff9588031805c000b7f320c36"); // its Pending Tasks data source
+    expect(jonas).toContain("2d5c675ff95880c1ba91cb520bc70bde"); // ♟️ Must Win Battle Board
+    expect(jonas).not.toContain("2d5c675ff9588011ac09cd22663b3c68"); // Touchdown stays shared with Jonas
+    expect(restrictedNotionIds()).toEqual(expect.arrayContaining(["2d3c675ff95880428289ccdb7612c52d", "2d5c675ff9588011ac09cd22663b3c68"]));
+  });
+  it("spots a private board named by someone outside it, and only then", () => {
+    expect(mentionsHiddenBoard("what's on the Touchdown agenda?", "laura@peaknine.studio")).toBe(true);
+    expect(mentionsHiddenBoard("what's on the Touchdown agenda?", "jonas@peaknine.studio")).toBe(false);
+    expect(mentionsHiddenBoard("show me Niels's MOTHERSHIP", "jonas@peaknine.studio")).toBe(true);
+    expect(mentionsHiddenBoard("the must win battle board", "sankhya@peaknine.studio")).toBe(true);
+    expect(mentionsHiddenBoard("show me Niels's mothership", "niels@peaknine.studio")).toBe(false);
+    expect(mentionsHiddenBoard("plan the poster with Laura", "")).toBe(false);
+    expect(mentionsHiddenBoard("mothershipping", "")).toBe(false);
+  });
+  it("turns an answer that names a hidden board into the neutral line", () => {
+    expect(scrubPrivate("Your Touchdown agenda has 3 items.", "laura@peaknine.studio")).toBe(PRIVATE_REPLY);
+    expect(scrubPrivate("Your Touchdown agenda has 3 items.", "jonas@peaknine.studio")).toBe("Your Touchdown agenda has 3 items.");
+    expect(PRIVATE_REPLY).not.toMatch(/private|touchdown|mothership/i);
+  });
 });
 
 describe("picker state", () => {
@@ -275,6 +304,23 @@ describe("picker state", () => {
 });
 
 describe("Notion row", () => {
+  it("fills Mothership's columns: multi-select project and the Tasks tag", () => {
+    const ms = DEFAULT_BOARDS.find((b) => b.key === "mothership")!;
+    const props = notionProperties(ms, {
+      title: "Call the accountant",
+      context: "Q4 invoices",
+      deadline: "2026-10-30",
+      project: "P9 - Sales",
+      urls: [],
+      source: null,
+      requesterNotionId: null,
+      assigneeNotionId: null,
+    });
+    expect(Object.keys(props).sort()).toEqual(["Due Date", "Project", "Tags", "Task"]);
+    expect(props.Project).toEqual({ multi_select: [{ name: "P9 - Sales" }] });
+    expect(props.Tags).toEqual({ multi_select: [{ name: "Tasks" }] });
+    expect(props["Due Date"]).toEqual({ date: { start: "2026-10-30" } });
+  });
   it("matches the board's columns", () => {
     const props = notionProperties(LAURA, {
       title: "Design the poster",

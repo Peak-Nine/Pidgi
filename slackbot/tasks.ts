@@ -19,7 +19,7 @@
  * distil step says so and the message goes to Pidgi's normal planning brain instead.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { notionClient } from "./notion.js";
+import { notionClient, notionDataSourceClient } from "./notion.js";
 import { recordUsage } from "./usage.js";
 import {
   A,
@@ -41,8 +41,12 @@ import {
   editModal,
   formatTranscript,
   houseStyle,
+  isRestrictedBoard,
   loadBoards,
   loadTeam,
+  mentionsHiddenBoard,
+  PRIVATE_REPLY,
+  scrubPrivate,
   mentionedUserIds,
   notionChildren,
   notionIdFor,
@@ -72,8 +76,9 @@ export interface TaskEvent {
   channel_type?: string;
 }
 
+/** `private`: the turn involved a restricted board, so it must stay out of a channel's shared memory. */
 export type CaptureResult =
-  | { kind: "handled"; summary: string }
+  | { kind: "handled"; summary: string; private?: boolean }
   | { kind: "not_task"; ack: { channel: string; ts: string } | null };
 
 const BOARDS: TaskBoard[] = loadBoards();
@@ -108,7 +113,9 @@ async function projectOptions(board: TaskBoard | undefined): Promise<string[]> {
   const hit = schemaCache.get(board.databaseId);
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.projects;
   try {
-    const db: any = await notionClient().databases.retrieve({ database_id: board.databaseId });
+    const db: any = board.dataSourceId
+      ? await notionDataSourceClient().request({ path: `data_sources/${board.dataSourceId}`, method: "get" })
+      : await notionClient().databases.retrieve({ database_id: board.databaseId });
     const prop = db?.properties?.[board.fields.project];
     const projects: string[] = (prop?.select?.options || prop?.multi_select?.options || []).map((o: any) => String(o.name));
     schemaCache.set(board.databaseId, { at: Date.now(), projects });
@@ -123,6 +130,15 @@ async function projectOptionsByBoard(boards: TaskBoard[]): Promise<Record<string
   const out: Record<string, string[]> = {};
   await Promise.all(boards.map(async (b) => (out[b.key] = await projectOptions(b))));
   return out;
+}
+
+/**
+ * Boards to show on a card or in a reply. Outside a DM, colleagues can read along, so private
+ * boards stay out of pickers and lists unless the card is for that board.
+ */
+function shownBoards(boards: TaskBoard[], channel: string, currentKey?: string): TaskBoard[] {
+  if (/^D/.test(String(channel || ""))) return boards;
+  return boards.filter((b) => !isRestrictedBoard(b) || b.key === currentKey);
 }
 
 function slackError(e: any): string {
@@ -354,6 +370,12 @@ export function taskCaptureEnabled(): boolean {
  * so the normal flow can reuse it) when the message is a question about tasks instead.
  */
 export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent, replyThreadTs?: string): Promise<CaptureResult> {
+  const requester = await person(client, ev.user);
+  // Naming a private board you're not part of gets the same neutral line, before anything else runs.
+  if (mentionsHiddenBoard(ev.text, requester.email, BOARDS)) {
+    await client.chat.postMessage({ channel: ev.channel, thread_ts: replyThreadTs, text: PRIVATE_REPLY });
+    return { kind: "handled", summary: PRIVATE_REPLY, private: true };
+  }
   let ack: { channel: string; ts: string } | null = null;
   try {
     const r: any = await client.chat.postMessage({ channel: ev.channel, thread_ts: replyThreadTs, text: "📝 Reading the conversation…" });
@@ -361,7 +383,9 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
   } catch {
     /* carry on without a placeholder */
   }
-  const say = async (text: string, blocks?: any[]) => {
+  const say = async (raw: string, blocks?: any[]) => {
+    const text = scrubPrivate(raw, requester.email, BOARDS);
+    if (text !== raw) blocks = undefined;
     if (ack) {
       try {
         await client.chat.update({ channel: ack.channel, ts: ack.ts, text, ...(blocks ? { blocks } : {}) });
@@ -391,7 +415,6 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
   }
 
   const today = todayBrussels();
-  const requester = await person(client, ev.user);
   const boards = boardsFor(requester.email, BOARDS);
   const projects = await projectOptionsByBoard(boards);
 
@@ -414,7 +437,7 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
     return { kind: "not_task", ack };
   }
 
-  const available = listNames(boards.map(boardRef));
+  const available = listNames(shownBoards(boards, ev.channel).map(boardRef));
   if (!result.tasks.length) {
     const msg = result.unknownBoard
       ? `I can add things to ${available} so far. Which one should this go to?`
@@ -424,6 +447,7 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
   }
 
   const titles: string[] = [];
+  const touchedPrivate = result.tasks.some((t) => isRestrictedBoard(boardOf(boards, t.board)));
   for (let i = 0; i < result.tasks.length; i++) {
     const t = result.tasks[i];
     const d: DraftPayload = {
@@ -441,7 +465,7 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
     };
     const notes = [...(result.notes[i] || [])];
     if (i === result.tasks.length - 1 && result.unknownBoard) notes.push(`I skipped an item for a board I don't have (I can use ${available}).`);
-    const blocks = draftBlocks(d, { boards, projectOptions: projects[d.a] || [], team: TEAM, notes });
+    const blocks = draftBlocks(d, { boards: shownBoards(boards, ev.channel, d.a), projectOptions: projects[d.a] || [], team: TEAM, notes });
     await say(draftFallbackText(d, boards), blocks);
     const b = boardOf(boards, t.board);
     titles.push(`"${t.title}" for ${b ? boardRef(b) : t.board}`);
@@ -449,6 +473,7 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
   return {
     kind: "handled",
     summary: `I drafted ${titles.length === 1 ? "one item" : `${titles.length} items`}: ${titles.join("; ")}. Nothing is on a board until someone clicks ✅ Add to board.`,
+    private: touchedPrivate,
   };
 }
 
@@ -489,7 +514,7 @@ async function redraw(client: any, at: { channel: string; ts: string }, d: Draft
     channel: at.channel,
     ts: at.ts,
     text: draftFallbackText(d, boards),
-    blocks: draftBlocks(d, { boards, projectOptions: options, team: TEAM }),
+    blocks: draftBlocks(d, { boards: shownBoards(boards, at.channel, d.a), projectOptions: options, team: TEAM }),
   });
 }
 
@@ -530,9 +555,7 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
       const board = boardOf(BOARDS, d.a);
       if (!board) return ephemeral(client, body, "Pick which board this goes to first.");
       const clicker = await person(client, userId);
-      if (!canUseBoard(board, clicker.email)) {
-        return ephemeral(client, body, `${boardRef(board).replace(/^t/, "T")} is private, so I can't add this for you. Pick another board.`);
-      }
+      if (!canUseBoard(board, clicker.email)) return ephemeral(client, body, PRIVATE_REPLY);
 
       const notes: string[] = [];
       let project = board.fields.project ? d.p : null;
@@ -560,8 +583,9 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
         if (assigneeNotionId && who) people.push(`${board.fields.assignee}: ${who.name}`);
       }
 
-      const page: any = await notionClient().pages.create({
-        parent: { database_id: board.databaseId },
+      // A board with several data sources (Mothership) is written through its data source.
+      const page: any = await (board.dataSourceId ? notionDataSourceClient() : notionClient()).pages.create({
+        parent: board.dataSourceId ? { type: "data_source_id", data_source_id: board.dataSourceId } : { database_id: board.databaseId },
         properties: notionProperties(board, {
           title: d.t,
           context: d.c,
