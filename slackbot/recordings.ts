@@ -28,10 +28,13 @@ export interface GtdRequest {
   pageId: string | null;
 }
 
-/** "GTD", "gtd GIZ namibia", "GTD <https://app.notion.com/p/...|link>". Anything else: null. */
+/**
+ * "GTD", "gtd GIZ namibia", "GTD <https://app.notion.com/p/...|link>", also after "@Pidgi - "
+ * or "@Pidgi: " and in *bold*. Anything else: null.
+ */
 export function parseGtd(text: string): GtdRequest | null {
   const t = String(text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-  const m = /^gtd\b[\s:,.!-]*([\s\S]*)$/i.exec(t);
+  const m = /^[\s\-–—:,.!*_~>]*gtd\b[\s:,.!*_~-]*([\s\S]*)$/i.exec(t);
   if (!m) return null;
   let rest = m[1].trim();
   let pageId: string | null = null;

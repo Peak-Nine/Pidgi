@@ -121,6 +121,8 @@ describe("parseGtd", () => {
     expect(parseGtd("GTD")).toEqual({ query: null, pageId: null });
     expect(parseGtd("gtd GIZ namibia")).toEqual({ query: "GIZ namibia", pageId: null });
     expect(parseGtd("<@UBOT> GTD: Bourguignon")).toEqual({ query: "Bourguignon", pageId: null });
+    for (const t of ["<@UBOT> - GTD", "- GTD", "— gtd", "<@UBOT>: GTD!", "*GTD*", "  GTD  "]) expect(parseGtd(t), t).toEqual({ query: null, pageId: null });
+    expect(parseGtd("<@UBOT> - GTD GIZ")).toEqual({ query: "GIZ", pageId: null });
     expect(parseGtd("GTD <https://app.notion.com/p/402c675ff95880689421c2a0e902ad57?pvs=4|link>")).toEqual({
       query: null,
       pageId: "402c675ff95880689421c2a0e902ad57",
