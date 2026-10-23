@@ -42,7 +42,8 @@ import { notionEnabled, notionToolDefs, handleNotionTool } from "./notion.js";
 import { renderShell, gatherDashboardData, gatherFinanceData, dashboardLink } from "./dashboard.js";
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { saveFormValue, loadFormValue, formsPersistent } from "./formstore.js";
-import { runTaskCapture, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
+import { runTaskCapture, runGtd, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
+import { parseGtd } from "./recordings.js";
 import {
   looksLikeTaskRequest,
   hiddenNotionIds,
@@ -1228,6 +1229,28 @@ async function main(): Promise<void> {
         unfurl_links: false,
         unfurl_media: false,
       });
+      return;
+    }
+    // "GTD": Niels's meeting recordings → draft cards. Only for whoever may read Mothership
+    // (where the recordings sit), and only in a DM, so the recordings stay between them and Pidgi.
+    const gtd = parseGtd(cleaned);
+    if (gtd && ev && taskDeps) {
+      const who = await resolveIdentity(slackUserId);
+      if (!boardsFor(who?.email || "", loadBoards()).some((b) => b.key === "mothership")) {
+        await say({ text: PRIVATE_REPLY, thread_ts: replyThreadTs });
+        return;
+      }
+      if (!isDirectMessage(convoKey)) {
+        await say({ text: "GTD only works in our DM, so your recordings stay between us.", thread_ts: replyThreadTs });
+        return;
+      }
+      try {
+        const r = await runGtd(slackWeb, taskDeps, { channel: ev.channel, ts: ev.ts, user: slackUserId, text: ev.text || text, channel_type: ev.channel_type }, gtd);
+        if (r.kind === "handled") remember(convoKey, cleaned, r.summary);
+      } catch (e: any) {
+        console.error("[gtd] failed:", e?.message || e);
+        await say({ text: `GTD failed: ${e?.message || e}`, thread_ts: replyThreadTs });
+      }
       return;
     }
     // Someone naming a private board they're not part of gets one neutral line, and the
