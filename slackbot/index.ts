@@ -1245,7 +1245,7 @@ async function main(): Promise<void> {
         return;
       }
       try {
-        const r = await runGtd(slackWeb, taskDeps, { channel: ev.channel, ts: ev.ts, user: slackUserId, text: ev.text || text, channel_type: ev.channel_type }, gtd);
+        const r = await runGtd(slackWeb, taskDeps, { channel: ev.channel, ts: ev.ts, user: slackUserId, text: ev.text || text, channel_type: ev.channel_type, thread_ts: ev.thread_ts }, gtd, replyThreadTs);
         if (r.kind === "handled") remember(convoKey, cleaned, r.summary);
       } catch (e: any) {
         console.error("[gtd] failed:", e?.message || e);
