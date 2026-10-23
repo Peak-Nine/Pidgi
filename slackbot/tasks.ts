@@ -21,6 +21,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { notionClient, notionDataSourceClient } from "./notion.js";
 import { recordUsage } from "./usage.js";
+import { GtdRequest, markDone, pickProblem, pickRecording } from "./recordings.js";
 import {
   A,
   DraftPayload,
@@ -31,6 +32,7 @@ import {
   boardOf,
   boardRef,
   addableBoardsFor,
+  boardsFor,
   canAddTo,
   calendarLines,
   canUseBoard,
@@ -47,6 +49,7 @@ import {
   loadTeam,
   mentionsHiddenBoard,
   PRIVATE_REPLY,
+  prettyDate,
   scrubPrivate,
   mentionedUserIds,
   notionChildren,
@@ -155,7 +158,7 @@ function listNames(names: string[]): string {
 
 interface Gathered {
   transcript: string;
-  mode: "thread" | "messages above" | "linked message";
+  mode: "thread" | "messages above" | "linked message" | "meeting recording";
   sourceLink: string | null;
   channelName: string;
   /** The tagging message as plain text, with mentions turned into names. */
@@ -312,7 +315,7 @@ function distilTool(boards: TaskBoard[], projects: Record<string, string[]>): an
 
 async function distil(
   deps: TaskDeps,
-  args: { g: Gathered; requesterName: string; today: string; boards: TaskBoard[]; projects: Record<string, string[]> }
+  args: { g: Gathered; requesterName: string; today: string; boards: TaskBoard[]; projects: Record<string, string[]>; instructions?: string }
 ): Promise<any> {
   const boardsList = args.boards
     .map((b) => {
@@ -327,6 +330,7 @@ async function distil(
   const user = [
     `Requested by: ${args.requesterName}, in ${args.g.channelName}, today ${args.today} (Europe/Brussels).`,
     `Request: "${args.g.request}"`,
+    ...(args.instructions ? ["", args.instructions] : []),
     "",
     "Boards this person can use (board keys):",
     boardsList,
@@ -482,6 +486,117 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
     summary: `I drafted ${titles.length === 1 ? "one item" : `${titles.length} items`}: ${titles.join("; ")}. Nothing is on a board until someone clicks ✅ Add to board.`,
     private: touchedPrivate,
   };
+}
+
+// ── 3b. GTD: a meeting recording → cards ────────────────────────────────────
+
+/** The boards GTD proposes for: Niels's own, Touchdown (also Jonas's), Sankhya's. */
+export const GTD_BOARDS = ["mothership", "touchdown", "sankhya"];
+
+function gtdInstructions(recordedOn: string): string {
+  return [
+    "This is a meeting recording: Notion's AI summary and notes. Propose the KEY follow-ups for Peak Nine only:",
+    "- Only what Niels, Jonas or Sankhya must do or decide. Leave out what people outside Peak Nine committed to, background and discussion.",
+    "- Niels's own actions go on mothership. Jonas's actions, and topics Niels and Jonas need to decide together, go on touchdown (responsible = Jonas or Niels). Sankhya's actions go on sankhya.",
+    "- At most 5, most important first. If there is nothing concrete for these boards, return no tasks.",
+    `- Relative dates in the recording ("Friday", "next week") are relative to the recording date, ${recordedOn}, not to today.`,
+    "- Write each title and context in the language of the recording.",
+  ].join("\n");
+}
+
+/**
+ * "GTD" in Niels's DM: find the recording (the last one without GTD on yet, or the one named),
+ * distil it into cards for his boards and post them in the DM. The recording is then ticked as done.
+ */
+export async function runGtd(client: any, deps: TaskDeps, ev: TaskEvent, req: GtdRequest): Promise<CaptureResult> {
+  const requester = await person(client, ev.user);
+  let ack: { channel: string; ts: string } | null = null;
+  try {
+    const r: any = await client.chat.postMessage({ channel: ev.channel, text: "🎙️ Looking for your recording…" });
+    if (r?.ts) ack = { channel: r.channel || ev.channel, ts: r.ts };
+  } catch {
+    /* carry on without a placeholder */
+  }
+  const say = async (text: string, blocks?: any[]) => {
+    if (ack) {
+      try {
+        await client.chat.update({ channel: ack.channel, ts: ack.ts, text, ...(blocks ? { blocks } : {}) });
+        ack = null;
+        return;
+      } catch {
+        /* fall through to a new message */
+      }
+    }
+    await client.chat.postMessage({ channel: ev.channel, text, ...(blocks ? { blocks } : {}) });
+  };
+
+  let pick;
+  try {
+    pick = await pickRecording(req);
+  } catch (e: any) {
+    const msg = `I couldn't read your recordings just now (${e?.code || e?.message || e}). Try again in a minute.`;
+    await say(msg);
+    return { kind: "handled", summary: msg, private: true };
+  }
+  if (!pick.ok) {
+    const msg = pickProblem(pick);
+    await say(msg);
+    return { kind: "handled", summary: msg, private: true };
+  }
+  const { row, content } = pick;
+  const recordedOn = row.created ? todayBrussels(new Date(row.created)) : todayBrussels();
+  const g: Gathered = {
+    transcript: content.text,
+    mode: "meeting recording",
+    sourceLink: row.url,
+    channelName: `the Notion recording "${content.title}" of ${prettyDate(recordedOn)}`,
+    request: "GTD: turn this meeting recording into tasks",
+    sourceText: `${content.text}\nGTD`,
+  };
+  const boards = boardsFor(requester.email, BOARDS).filter((b) => GTD_BOARDS.includes(b.key));
+  const projects = await projectOptionsByBoard(boards);
+
+  let raw: any;
+  try {
+    raw = await distil(deps, { g, requesterName: requester.name, today: todayBrussels(), boards, projects, instructions: gtdInstructions(recordedOn) });
+  } catch (e: any) {
+    const msg = `I couldn't distil *${content.title}* just now (${e?.message || e}). Try again in a minute.`;
+    await say(msg);
+    return { kind: "handled", summary: msg, private: true };
+  }
+  const result = validateDistilled({ ...(raw || {}), is_task_request: true }, { boards, projectOptions: projects, team: TEAM, sourceText: g.sourceText, today: todayBrussels() });
+  const ticked = await markDone(row);
+  const tickNote = ticked ? "" : " (I couldn't tick its GTD box in Notion: add a checkbox column called GTD to 🎙️ Recordings.)";
+
+  if (!result.tasks.length) {
+    const msg = `Nothing concrete for your boards in *${content.title}*.${tickNote}`;
+    await say(msg);
+    return { kind: "handled", summary: msg, private: true };
+  }
+  const n = result.tasks.length;
+  await say(`From *<${row.url}|${content.title}>* (${prettyDate(recordedOn)}): ${n === 1 ? "one suggestion" : `${n} suggestions`}. Nothing lands on a board until you click ✅.${tickNote}`);
+  const titles: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = result.tasks[i];
+    const d: DraftPayload = {
+      v: 1,
+      t: t.title,
+      c: t.context,
+      u: t.urls,
+      s: row.url,
+      q: ev.user,
+      a: t.board,
+      d: t.deadline,
+      dq: t.deadlineQuote,
+      p: t.project,
+      r: t.responsible,
+    };
+    const blocks = draftBlocks(d, { boards, projectOptions: projects[d.a] || [], team: TEAM, notes: result.notes[i] || [] });
+    await say(draftFallbackText(d, boards), blocks);
+    const b = boardOf(boards, t.board);
+    titles.push(`"${t.title}" for ${b ? boardRef(b) : t.board}`);
+  }
+  return { kind: "handled", summary: `GTD on "${content.title}": I drafted ${titles.join("; ")}.`, private: true };
 }
 
 // ── 4. Buttons, pickers and the edit modal ──────────────────────────────────

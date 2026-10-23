@@ -149,6 +149,16 @@ A question about tasks ("what tasks does Laura have this week?", "what's on the 
 recognised as a question and goes to Pidgi's normal brain. Pidgi's general Notion tools are blocked from
 adding rows to any of these boards, so every new item passes through a draft card.
 
+**GTD (Niels only, DM only).** Niels's Notion AI meeting notes land in 🎙️ Recordings. In a DM with Pidgi:
+- `GTD` takes the newest recording that has content and no GTD yet,
+- `GTD GIZ` takes the newest recording whose title or meeting title has those words,
+- `GTD <notion link>` takes that recording (only if it is in Recordings).
+Pidgi reads the summary (the transcript only when there is no summary), proposes at most 5 key follow-ups
+for Mothership (Niels), Touchdown (Jonas, or Niels and Jonas together) and Sankhya's board, posts them as
+draft cards in the DM, and ticks the recording's GTD checkbox (it adds that column if it is missing).
+Recordings is on Niels's private list, so nobody else can read it through Pidgi. In a channel, GTD
+answers that it only works in a DM.
+
 ### One-time setup
 
 Slack app (api.slack.com/apps → Pidgi):

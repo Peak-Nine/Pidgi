@@ -219,6 +219,8 @@ export const DEFAULT_BOARDS: TaskBoard[] = [
       "2d3c675ff9588031805c000b7f320c36", // Pending Tasks data source
       "2d5c675ff95880c1ba91cb520bc70bde", // ♟️ Must Win Battle Board (on Strategy)
       "2d5c675ff9588051bdae000b4dd1d23e", // its data source
+      "402c675ff958800990a0d32640656e2a", // 🎙️ Recordings (Niels's meeting notes, read by GTD)
+      "402c675ff958802b865a000b1f175a8c", // its data source
     ],
     secretWords: ["mothership", "must win battle", "mwb"],
   },
@@ -965,7 +967,7 @@ export function notionProperties(
     });
     if (f.source) {
       if (res.length) res.push(rt("\n"));
-      res.push(rt("Slack thread", f.source));
+      res.push(rt(isNotionUrl(f.source) ? "Recording" : "Slack thread", f.source));
     }
     if (res.length) props[p.resources] = { rich_text: res };
   }
@@ -975,6 +977,11 @@ export function notionProperties(
   if (p.requester && f.requesterNotionId) props[p.requester] = { people: [{ id: f.requesterNotionId }] };
   if (p.assignee && f.assigneeNotionId) props[p.assignee] = { people: [{ id: f.assigneeNotionId }] };
   return props;
+}
+
+/** A source link that points to Notion (a meeting recording) rather than Slack. */
+export function isNotionUrl(url: string): boolean {
+  return /^https?:\/\/([a-z0-9-]+\.)?notion\.(so|com|site)\//i.test(String(url || ""));
 }
 
 /**
@@ -990,11 +997,12 @@ export function notionChildren(
   if (!board.fields.resources) {
     for (const u of f.urls) blocks.push({ object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: [rt(u, u)] } });
   }
-  const line: any[] = [rt(`Captured from Slack by Pidgi on ${prettyDate(f.today)}, asked by ${f.requesterName}.`)];
-  if (f.source) line.push(rt(" "), rt("Open the Slack thread", f.source));
+  const fromNotion = !!f.source && isNotionUrl(f.source);
+  const line: any[] = [rt(`Captured from ${fromNotion ? "a meeting recording" : "Slack"} by Pidgi on ${prettyDate(f.today)}, asked by ${f.requesterName}.`)];
+  if (f.source) line.push(rt(" "), rt(fromNotion ? "Open the recording" : "Open the Slack thread", f.source));
   blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: line } });
   if (f.deadlineQuote) {
-    blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: [rt(`Deadline as said in Slack: “${f.deadlineQuote}”`)] } });
+    blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: [rt(`Deadline as said in ${fromNotion ? "the meeting" : "Slack"}: “${f.deadlineQuote}”`)] } });
   }
   return blocks;
 }
