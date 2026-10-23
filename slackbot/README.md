@@ -154,7 +154,7 @@ adding rows to any of these boards, so every new item passes through a draft car
 - `GTD GIZ` takes the newest recording whose title or meeting title has those words,
 - `GTD <notion link>` takes that recording (only if it is in Recordings).
 Pidgi reads the summary (the transcript only when there is no summary), proposes at most 5 key follow-ups
-for Mothership (Niels), Touchdown (Jonas, or Niels and Jonas together) and Sankhya's board, posts them as
+for Mothership (Niels), Touchdown (Jonas, or Niels and Jonas together), Sankhya's and Laura's boards, posts them as
 draft cards in the DM, and ticks the recording's GTD checkbox (it adds that column if it is missing).
 Recordings is on Niels's private list, so nobody else can read it through Pidgi. In a channel, GTD
 answers that it only works in a DM.

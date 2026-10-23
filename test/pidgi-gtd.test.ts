@@ -189,7 +189,8 @@ describe("GTD run", () => {
       problem: "",
       tasks: [
         { board: "mothership", title: "Share the Peak Nine website with Marie on LinkedIn", context: "Marie reviews it for links with GIZ.", deadline: "2026-10-23", deadline_quote: "by Friday", project: "P9 - Sales", responsible: "", urls: [] },
-        { board: "laura", title: "Not a GTD board", context: "", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] },
+        { board: "laura", title: "Design a one-pager on Proof of Change for GIZ", context: "Marie will review the website for links with GIZ.", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] },
+        { board: "team", title: "Not a GTD board", context: "", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] },
       ],
     });
     const deps = { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: (u: string, r: string) => u === r };
@@ -199,11 +200,13 @@ describe("GTD run", () => {
     const prompt = claude.seen[0].messages[0].content as string;
     expect(prompt).toContain("Introductory Networking Call: Peak Nine & GIZ Namibia");
     expect(prompt).toContain("Niels to share the Peak Nine website URL via LinkedIn by Friday");
-    expect(prompt).toContain("Only what Niels, Jonas or Sankhya must do");
-    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["sankhya", "touchdown", "mothership", "unknown"]);
+    expect(prompt).toContain("Only what Niels, Jonas, Sankhya or Laura must do");
+    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "touchdown", "mothership", "unknown"]);
 
-    // Header + one card (the Laura item isn't on a GTD board), all in the DM.
-    expect(slack.calls.update[0].text).toContain("one suggestion");
+    // Header + two cards (the team sync item isn't a GTD board), all in the DM.
+    expect(slack.calls.update[0].text).toContain("2 suggestions");
+    const laura = slack.calls.postMessage.filter((m: any) => m.blocks)[1];
+    expect(JSON.stringify(laura.blocks)).toContain("Design a one-pager on Proof of Change for GIZ");
     expect(slack.calls.update[0].text).toContain("GIZ Namibia");
     const card = slack.calls.postMessage.find((m: any) => m.blocks);
     expect(card.channel).toBe("D1");
