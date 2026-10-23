@@ -43,7 +43,7 @@ import { renderShell, gatherDashboardData, gatherFinanceData, dashboardLink } fr
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { saveFormValue, loadFormValue, formsPersistent } from "./formstore.js";
 import { runTaskCapture, runGtd, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
-import { parseGtd } from "./recordings.js";
+import { parseGtd, bareNotionLink, isRecordingPage } from "./recordings.js";
 import {
   looksLikeTaskRequest,
   hiddenNotionIds,
@@ -1233,7 +1233,14 @@ async function main(): Promise<void> {
     }
     // "GTD": Niels's meeting recordings → draft cards. Only for whoever may read Mothership
     // (where the recordings sit), and only in a DM, so the recordings stay between them and Pidgi.
-    const gtd = parseGtd(cleaned);
+    let gtd = parseGtd(cleaned);
+    // A recording's Notion link pasted on its own in the DM also means GTD on that recording.
+    const pasted = !gtd && ev && taskDeps && isDirectMessage(convoKey) ? bareNotionLink(cleaned) : null;
+    if (pasted) {
+      const who = await resolveIdentity(slackUserId);
+      const owner = boardsFor(who?.email || "", loadBoards()).some((b) => b.key === "mothership");
+      if (owner && (await isRecordingPage(pasted))) gtd = { query: null, pageId: pasted };
+    }
     if (gtd && ev && taskDeps) {
       const who = await resolveIdentity(slackUserId);
       if (!boardsFor(who?.email || "", loadBoards()).some((b) => b.key === "mothership")) {
