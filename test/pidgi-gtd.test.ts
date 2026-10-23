@@ -69,7 +69,7 @@ vi.mock("../slackbot/notion.js", () => ({
 }));
 vi.mock("../slackbot/usage.js", () => ({ recordUsage: () => {} }));
 
-import { parseGtd, matchesQuery, readRecording, pickRecording, pickProblem } from "../slackbot/recordings.js";
+import { parseGtd, matchesQuery, readRecording, pickRecording, pickProblem, bareNotionLink, isRecordingPage } from "../slackbot/recordings.js";
 import { runGtd, registerTaskActions } from "../slackbot/tasks.js";
 import { hiddenNotionIds } from "../slackbot/taskboards.js";
 
@@ -129,6 +129,21 @@ describe("parseGtd", () => {
     });
     expect(parseGtd("GTD https://www.notion.so/Meeting-402c675f-f958-8068-9421-c2a0e902ad57")?.pageId).toBe("402c675ff95880689421c2a0e902ad57");
   });
+  it("reads the right id from links whose title looks like hex, and bare links", () => {
+    expect(parseGtd("GTD https://app.notion.com/p/Cafe-Deed-402c675ff95880689421c2a0e902ad57?v=402c675ff95880be8d88000c741fc97f")?.pageId).toBe(
+      "402c675ff95880689421c2a0e902ad57"
+    );
+    expect(bareNotionLink("<https://app.notion.com/p/Thermo-Fisher-402c675ff95880689421c2a0e902ad57?v=1&source=copy_link>")).toBe("402c675ff95880689421c2a0e902ad57");
+    expect(bareNotionLink("<@UBOT> <https://app.notion.com/p/402c675ff95880689421c2a0e902ad57|Thermo Fisher>")).toBe("402c675ff95880689421c2a0e902ad57");
+    expect(bareNotionLink("look at <https://app.notion.com/p/402c675ff95880689421c2a0e902ad57>")).toBeNull();
+    expect(bareNotionLink("https://example.com/x")).toBeNull();
+  });
+  it("ignores filler words like 'recording' when matching", () => {
+    expect(matchesQuery("Thermo Fisher 2026-10-23T14:09", "Thermo Fisher recording")).toBe(true);
+    expect(matchesQuery("Thermo Fisher", "the thermo fisher meeting of today")).toBe(true);
+    expect(parseGtd("GTD recording")).toEqual({ query: null, pageId: null }); // just "the latest"
+    expect(parseGtd("GTD laatste opname")).toEqual({ query: null, pageId: null });
+  });
   it("ignores anything that doesn't start with GTD", () => {
     expect(parseGtd("let's go")).toBeNull();
     expect(parseGtd("what is gtd?")).toBeNull();
@@ -165,6 +180,17 @@ describe("picking the recording", () => {
     const r = await pickRecording({ query: "bourguignon", pageId: null });
     expect(r.ok && r.content.title).toBe("Bourguignon Strategy Review");
     expect((await pickRecording({ query: "takeda", pageId: null })).ok).toBe(false);
+  });
+  it("says a named recording is unreadable instead of 'no match'", async () => {
+    ROWS.unshift(row("aaaa0000000000000000000000000004", "Thermo Fisher 2026-10-23T14:09", "2026-10-23T12:09:00Z"));
+    CHILDREN["aaaa0000000000000000000000000004"] = [{ id: "x", type: "unsupported", has_children: false, unsupported: {} }];
+    const r = await pickRecording({ query: "Thermo Fisher recording", pageId: null });
+    expect(r).toEqual({ ok: false, reason: "unreadable", detail: "unsupported" });
+    expect(pickProblem(r as any)).toContain("unsupported");
+  });
+  it("knows whether a pasted link is a recording", async () => {
+    expect(await isRecordingPage("aaaa0000000000000000000000000002")).toBe(true);
+    expect(await isRecordingPage("ffff0000000000000000000000000009")).toBe(false);
   });
   it("opens a linked one only when it is in Recordings", async () => {
     const r = await pickRecording({ query: null, pageId: "aaaa0000000000000000000000000002" });

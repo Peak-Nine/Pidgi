@@ -41,18 +41,38 @@ export function parseGtd(text: string): GtdRequest | null {
   const link = /<?(https?:\/\/[^\s|>]*notion\.(?:so|com|site)[^\s|>]*)(?:\|[^>]*)?>?/i.exec(rest);
   if (link) {
     const path = link[1].split(/[?#]/)[0].replace(/-/g, "");
-    const ids = path.match(/[0-9a-f]{32}/gi);
+    // The id is the LAST 32 hex characters: a title like "Cafe-<id>" must not shift it.
+    const ids = path.match(/[0-9a-f]{32}(?![0-9a-f])/gi);
     if (ids?.length) pageId = ids[ids.length - 1].toLowerCase();
     rest = rest.replace(link[0], "").trim();
   }
-  return { query: rest || null, pageId };
+  return { query: rest && significantWords(rest).length ? rest : null, pageId };
 }
 
-/** Do all words of the query appear in the text (case and accents ignored)? */
+/** A message that is nothing but a Notion link (pasted on its own): its page id, else null. */
+export function bareNotionLink(text: string): string | null {
+  const t = String(text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+  // Either a raw URL or Slack's <url|label> form (the label may hold spaces).
+  if (!/^(<https?:\/\/[^>\s|]+(\|[^>]*)?>|https?:\/\/\S+)$/i.test(t)) return null;
+  const r = parseGtd(`GTD ${t}`);
+  return r && !r.query ? r.pageId : null;
+}
+
+// Words that describe a recording rather than name it ("GTD Thermo Fisher recording").
+const FILLER = new Set(
+  "recording recordings meeting meetings call calls notes note session the a an of with from for my our today yesterday this last latest opname vergadering gesprek sessie de het een van met mijn onze vandaag gisteren laatste".split(" ")
+);
+const fold = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+function significantWords(query: string): string[] {
+  return fold(query)
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 1 && !FILLER.has(w));
+}
+
+/** Do all words that name the recording appear in the text (case, accents and filler words ignored)? */
 export function matchesQuery(text: string, query: string): boolean {
-  const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const hay = fold(text);
-  const words = fold(query).split(/[^a-z0-9]+/).filter((w) => w.length > 1);
+  const words = significantWords(query);
   return words.length > 0 && words.every((w) => hay.includes(w));
 }
 
@@ -188,6 +208,15 @@ function isAccessError(e: any): boolean {
   return /object_not_found|restricted_resource|unauthorized/i.test(String(e?.code || e?.message || ""));
 }
 
+/** Is this page a recording in 🎙️ Recordings? (false when Pidgi can't open it) */
+export async function isRecordingPage(pageId: string): Promise<boolean> {
+  try {
+    return inRecordings(await notionDataSourceClient().pages.retrieve({ page_id: pageId }));
+  } catch {
+    return false;
+  }
+}
+
 /** Which recording GTD should work on, read and ready. */
 export async function pickRecording(req: GtdRequest): Promise<Pick> {
   try {
@@ -207,11 +236,14 @@ export async function pickRecording(req: GtdRequest): Promise<Pick> {
       if (!req.query && (row.done || doneHere.has(row.id))) continue;
       if (reads++ >= (req.query ? 15 : 10)) break;
       const content = await readRecording(row.id, row.title);
+      const named = !!req.query && matchesQuery(`${row.title}\n${content.title}`, req.query);
       if (!content.text.trim()) {
+        // A named recording we can't read: say so, rather than "no match".
+        if (named) return { ok: false, reason: "unreadable", detail: content.blockTypes.join(", ") || "nothing" };
         lastEmpty = content;
         continue;
       }
-      if (req.query && !matchesQuery(`${row.title}\n${content.title}`, req.query)) continue;
+      if (req.query && !named) continue;
       return { ok: true, row, content };
     }
     if (req.query) return { ok: false, reason: "no_match" };
