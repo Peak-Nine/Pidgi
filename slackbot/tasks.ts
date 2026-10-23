@@ -508,11 +508,14 @@ function gtdInstructions(recordedOn: string): string {
  * "GTD" in Niels's DM: find the recording (the last one without GTD on yet, or the one named),
  * distil it into cards for his boards and post them in the DM. The recording is then ticked as done.
  */
-export async function runGtd(client: any, deps: TaskDeps, ev: TaskEvent, req: GtdRequest): Promise<CaptureResult> {
+export async function runGtd(client: any, deps: TaskDeps, ev: TaskEvent, req: GtdRequest, replyThreadTs?: string): Promise<CaptureResult> {
+  // Pidgi's DM is an agent chat where every conversation is a thread: reply in it, or the
+  // messages land outside the conversation Niels is looking at.
+  const thread = replyThreadTs || ev.thread_ts;
   const requester = await person(client, ev.user);
   let ack: { channel: string; ts: string } | null = null;
   try {
-    const r: any = await client.chat.postMessage({ channel: ev.channel, text: "🎙️ Looking for your recording…" });
+    const r: any = await client.chat.postMessage({ channel: ev.channel, thread_ts: thread, text: "🎙️ Looking for your recording…" });
     if (r?.ts) ack = { channel: r.channel || ev.channel, ts: r.ts };
   } catch {
     /* carry on without a placeholder */
@@ -527,7 +530,7 @@ export async function runGtd(client: any, deps: TaskDeps, ev: TaskEvent, req: Gt
         /* fall through to a new message */
       }
     }
-    await client.chat.postMessage({ channel: ev.channel, text, ...(blocks ? { blocks } : {}) });
+    await client.chat.postMessage({ channel: ev.channel, thread_ts: thread, text, ...(blocks ? { blocks } : {}) });
   };
 
   let pick;
@@ -565,16 +568,18 @@ export async function runGtd(client: any, deps: TaskDeps, ev: TaskEvent, req: Gt
     return { kind: "handled", summary: msg, private: true };
   }
   const result = validateDistilled({ ...(raw || {}), is_task_request: true }, { boards, projectOptions: projects, team: TEAM, sourceText: g.sourceText, today: todayBrussels() });
-  const ticked = await markDone(row);
-  const tickNote = ticked ? "" : " (I couldn't tick its GTD box in Notion: add a checkbox column called GTD to 🎙️ Recordings.)";
+  // Ticked only once the answer is posted, so a run that fails never hides a recording.
+  const tick = async () => ((await markDone(row)) ? "" : "I couldn't tick its GTD box in Notion: add a checkbox column called GTD to 🎙️ Recordings.");
 
   if (!result.tasks.length) {
-    const msg = `Nothing concrete for your boards in *${content.title}*.${tickNote}`;
+    const msg = `Nothing concrete for your boards in *<${row.url}|${content.title}>*.`;
     await say(msg);
+    const note = await tick();
+    if (note) await say(note);
     return { kind: "handled", summary: msg, private: true };
   }
   const n = result.tasks.length;
-  await say(`From *<${row.url}|${content.title}>* (${prettyDate(recordedOn)}): ${n === 1 ? "one suggestion" : `${n} suggestions`}. Nothing lands on a board until you click ✅.${tickNote}`);
+  await say(`From *<${row.url}|${content.title}>* (${prettyDate(recordedOn)}): ${n === 1 ? "one suggestion" : `${n} suggestions`}. Nothing lands on a board until you click ✅.`);
   const titles: string[] = [];
   for (let i = 0; i < n; i++) {
     const t = result.tasks[i];
@@ -596,6 +601,8 @@ export async function runGtd(client: any, deps: TaskDeps, ev: TaskEvent, req: Gt
     const b = boardOf(boards, t.board);
     titles.push(`"${t.title}" for ${b ? boardRef(b) : t.board}`);
   }
+  const note = await tick();
+  if (note) await say(note);
   return { kind: "handled", summary: `GTD on "${content.title}": I drafted ${titles.join("; ")}.`, private: true };
 }
 

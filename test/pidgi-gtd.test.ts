@@ -196,7 +196,10 @@ describe("GTD run", () => {
       ],
     });
     const deps = { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: (u: string, r: string) => u === r };
-    const r = await runGtd(slack, deps, { channel: "D1", ts: "1.1", user: "UNIELS", text: "GTD", channel_type: "im" }, { query: null, pageId: null });
+    // In Pidgi's agent DM every conversation is a thread.
+    const r = await runGtd(slack, deps, { channel: "D1", ts: "1.1", thread_ts: "1.0", user: "UNIELS", text: "GTD", channel_type: "im" }, { query: null, pageId: null }, "1.0");
+    expect(slack.calls.postMessage.length).toBeGreaterThan(1);
+    for (const m of slack.calls.postMessage) expect(m.thread_ts, m.text).toBe("1.0");
 
     expect(r).toMatchObject({ kind: "handled", private: true });
     const prompt = claude.seen[0].messages[0].content as string;
@@ -249,7 +252,18 @@ describe("GTD run", () => {
     fakeNotion.pages.update = orig;
     expect(schemaPatched).toBe(true);
     expect(updates).toHaveLength(1);
-    expect(slack.calls.update[0].text).toBe("Nothing concrete for your boards in *Introductory Networking Call: Peak Nine & GIZ Namibia*.");
+    expect(slack.calls.update[0].text).toBe(
+      "Nothing concrete for your boards in *<https://www.notion.so/aaaa0000000000000000000000000002|Introductory Networking Call: Peak Nine & GIZ Namibia>*."
+    );
+  });
+
+  it("doesn't tick the recording when the run fails", async () => {
+    const slack = fakeSlack();
+    const broken = { seen: [], messages: { create: async () => Promise.reject(new Error("overloaded")) } };
+    const r = await runGtd(slack, { anthropic: broken as any, model: "m", canConfirm: () => true }, { channel: "D1", ts: "1.1", user: "UNIELS", text: "GTD" }, { query: null, pageId: "aaaa0000000000000000000000000002" });
+    expect(r.kind).toBe("handled");
+    expect(slack.calls.update[0].text).toContain("couldn't distil");
+    expect(updates).toHaveLength(0);
   });
 
   it("keeps Recordings hidden from everyone but Niels", () => {
