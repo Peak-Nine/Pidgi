@@ -213,7 +213,7 @@ describe("draft card", () => {
     const blocks = draftBlocks(draft(), { boards: DEFAULT_BOARDS, projectOptions: PROJECTS });
     const fields = blocks.find((b) => b.block_id === "p9task_fields");
     expect(fields.elements.map((e: any) => e.action_id)).toEqual(["p9task_owner", "p9task_deadline", "p9task_project"]);
-    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "touchdown", "mothership", "team"]);
+    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "touchdown", "mothership", "events", "team"]);
     expect(fields.elements[0].initial_option.value).toBe("laura");
     expect(fields.elements[1].initial_date).toBe("2026-10-23");
     expect(fields.elements[2].initial_option.value).toBe("Marketing");
@@ -247,7 +247,7 @@ describe("meeting board cards", () => {
   it("hides private boards from people outside the circle", () => {
     const blocks = draftBlocks(draft(), { boards: boardsFor("sankhya@peaknine.studio"), projectOptions: PROJECTS, team: DEFAULT_TEAM });
     const fields = blocks.find((b) => b.block_id === "p9task_fields");
-    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "team"]);
+    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "events", "team"]);
   });
 });
 
@@ -286,7 +286,7 @@ describe("access to private boards", () => {
     expect(mentionsHiddenBoard("mothershipping", "")).toBe(false);
   });
   it("lets the whole team add to Touchdown, but not read it", () => {
-    expect(addableBoardsFor("laura@peaknine.studio").map((b) => b.key)).toEqual(["laura", "sankhya", "touchdown", "team"]);
+    expect(addableBoardsFor("laura@peaknine.studio").map((b) => b.key)).toEqual(["laura", "sankhya", "touchdown", "events", "team"]);
     expect(boardsFor("laura@peaknine.studio").map((b) => b.key)).not.toContain("touchdown");
     expect(hiddenNotionIds("laura@peaknine.studio")).toContain("2d5c675ff9588011ac09cd22663b3c68");
     expect(mentionsHiddenBoard("put this on the touchdown", "laura@peaknine.studio", undefined, { exceptAddable: true })).toBe(false);
@@ -316,6 +316,51 @@ describe("picker state", () => {
   });
   it("leaves the draft alone when the pickers were not touched", () => {
     expect(applyFieldState(draft(), readFieldState({}))).toEqual(draft());
+  });
+});
+
+describe("events list", () => {
+  const EVENTS = DEFAULT_BOARDS.find((b) => b.key === "events")!;
+  it("is open to the whole team and triggered by event words", () => {
+    expect(boardsFor("laura@peaknine.studio").map((b) => b.key)).toContain("events");
+    expect(looksLikeTaskRequest("put this on the events list")).toBe(true);
+    expect(looksLikeTaskRequest("zet dit evenement op de lijst")).toBe(true);
+  });
+  it("keeps an end date only when its words are in the conversation and it isn't before the start", () => {
+    const base = { boards: DEFAULT_BOARDS, projectOptions: { events: ["Aid", "Systems"] }, team: DEFAULT_TEAM, sourceText: "Summit on 12-13 November", today: "2026-10-24" };
+    const ev = (end: string, quote: string) =>
+      validateDistilled(
+        { is_task_request: true, tasks: [{ board: "events", title: "Summit", context: "", deadline: "2026-11-12", deadline_quote: "12-13 November", end_date: end, end_date_quote: quote, project: "Systems", responsible: "", urls: [] }] },
+        base
+      ).tasks[0];
+    expect(ev("2026-11-13", "12-13 November")).toMatchObject({ deadline: "2026-11-12", endDate: "2026-11-13", project: "Systems" });
+    expect(ev("2026-11-13", "14 November").endDate).toBeNull();
+    expect(ev("2026-11-10", "12-13 November").endDate).toBeNull();
+  });
+  it("labels the card's pickers Start date and Theme", () => {
+    const blocks = draftBlocks({ v: 1, t: "Summit", c: "", u: [], s: null, q: "U1", a: "events", d: "2026-11-12", dq: "12-13 November", p: null, e: "2026-11-13" }, {
+      boards: DEFAULT_BOARDS,
+      projectOptions: ["Aid", "Systems"],
+    });
+    const fields = blocks.find((b) => b.block_id === "p9task_fields");
+    expect(fields.elements.map((e: any) => e.placeholder?.text)).toEqual(["Which board?", "Start date", "Theme"]);
+    expect(JSON.stringify(blocks)).toContain("Ends ");
+  });
+  it("fills the Events columns", () => {
+    const props = notionProperties(EVENTS, {
+      title: "Summit",
+      context: "x",
+      deadline: "2026-11-12",
+      endDate: "2026-11-13",
+      project: "Systems",
+      urls: ["https://a.example/x", "https://b.example"],
+      source: null,
+      requesterNotionId: "n1",
+      assigneeNotionId: null,
+    });
+    expect(Object.keys(props).sort()).toEqual(["End date", "Event name", "Link", "Owner", "Start date", "Theme"]);
+    expect(props.Theme).toEqual({ multi_select: [{ name: "Systems" }] });
+    expect(props.Link).toEqual({ url: "https://a.example/x" });
   });
 });
 

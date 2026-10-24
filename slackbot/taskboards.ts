@@ -66,8 +66,16 @@ export interface BoardFields {
   text?: string;
   deadline?: string;
   status?: { prop: string; type: "select" | "status"; value: string };
+  /** What the date picker is called on the card ("Deadline" when absent, "Start date" for events). */
+  deadlineLabel?: string;
+  /** date: the last day of something that spans several days (events). */
+  endDate?: string;
+  /** url: the first link from the conversation (events). */
+  url?: string;
   /** select (or multi_select, see projectType): options are read live from Notion. */
   project?: string;
+  /** What the project picker is called on the card ("Project" when absent). */
+  projectLabel?: string;
   projectType?: "select" | "multi_select";
   /** multi_select set on every new row, e.g. Tags = Tasks. */
   tag?: { prop: string; value: string };
@@ -82,7 +90,8 @@ export interface BoardFields {
 export interface TaskBoard {
   /** Stable key used in Slack payloads, e.g. "laura", "touchdown". */
   key: string;
-  kind: "person" | "meeting";
+  /** person: someone's backlog; meeting: an agenda; list: a shared list of things (events). */
+  kind: "person" | "meeting" | "list";
   /** Short name: "Laura", "Touchdown". */
   name: string;
   /** How the board is called in Slack: "Laura's board", "Touchdown agenda". */
@@ -225,6 +234,29 @@ export const DEFAULT_BOARDS: TaskBoard[] = [
     secretWords: ["mothership", "must win battle", "mwb"],
   },
   {
+    key: "events",
+    kind: "list",
+    name: "Events",
+    label: "events list",
+    description:
+      "Events worth attending: conferences, summits, webinars, meetups the team thinks Peak Nine could go to. title = the event's own name; deadline = its start date; end_date = its last day when it lasts more than one day; urls = the event's own page; project = its theme.",
+    aliases: ["events", "event", "events list", "events board", "event board", "events worth attending", "evenement", "evenementen"],
+    // Events worth attending → Events. Whoever asks Pidgi becomes the Owner.
+    databaseId: "69cb02e89b0a44d987d9aaad4dd9c723",
+    boardUrl: "https://www.notion.so/400c675ff9588184b591ce1f9373ff96",
+    fields: {
+      title: "Event name",
+      deadline: "Start date",
+      deadlineLabel: "Start date",
+      endDate: "End date",
+      url: "Link",
+      requester: "Owner",
+      project: "Theme",
+      projectType: "multi_select",
+      projectLabel: "Theme",
+    },
+  },
+  {
     key: "team",
     kind: "meeting",
     name: "Team sync",
@@ -259,7 +291,7 @@ export function loadBoards(env: Record<string, string | undefined> = process.env
     for (const b of list) {
       if (!b?.key || !b?.databaseId) continue;
       const key = String(b.key).toLowerCase();
-      const kind = b.kind === "meeting" ? "meeting" : "person";
+      const kind = b.kind === "meeting" || b.kind === "list" ? b.kind : "person";
       const name = String(b.name || key);
       out.push({
         key,
@@ -370,7 +402,7 @@ export function scrubPrivate(text: string, email: string | null | undefined, boa
  */
 export function looksLikeTaskRequest(text: string): boolean {
   const t = String(text || "");
-  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|touchdown|mothership|(?<![0-9])1[:-]1(?![0-9])|1-on-1|one[- ]on[- ]one|(een|één)[- ]op[- ](een|één)|founders'? ?(meeting|overleg)|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
+  if (/(^|[^a-z])(tasks?|to-?dos?|todo's|taak|taken|action items?|actiepunt(en)?|backlog|boards?|bord|events?|evenement(en)?|touchdown|mothership|(?<![0-9])1[:-]1(?![0-9])|1-on-1|one[- ]on[- ]one|(een|één)[- ]op[- ](een|één)|founders'? ?(meeting|overleg)|talking points?|bespreekpunt(en)?|team ?meeting|team ?sync|teamoverleg)([^a-z]|$)/i.test(t)) return true;
   return /(^|[^a-z])(on|onto|to|op|for|voor|naar)\s+(the\s+|de\s+|het\s+|our\s+|onze\s+)?(?!my\s|mijn\s)([a-z-]+\s+)?agenda([^a-z]|$)/i.test(t);
 }
 
@@ -546,6 +578,8 @@ export interface DraftTask {
   context: string;
   deadline: string | null;
   deadlineQuote: string | null;
+  /** Last day, for boards with an end date (events). */
+  endDate?: string | null;
   project: string | null;
   urls: string[];
   /** Email of the person named as responsible (meeting boards). */
@@ -609,7 +643,13 @@ export function validateDistilled(
       deadline = null;
     }
     if (!deadline) deadlineQuote = null;
-    if (deadline && deadline < opts.today) notes.push(`The deadline I found (${prettyDate(deadline)}) is already in the past.`);
+    const dateWord = board.fields.deadlineLabel ? board.fields.deadlineLabel.toLowerCase() : "deadline";
+    if (deadline && deadline < opts.today) notes.push(`The ${dateWord} I found (${prettyDate(deadline)}) is already in the past.`);
+
+    // An end date follows the same rule: it must come with words that are really in the conversation.
+    let endDate: string | null = board.fields.endDate && deadline && isIsoDate(t?.end_date) ? t.end_date : null;
+    const endQuote = t?.end_date_quote ? String(t.end_date_quote).trim() : "";
+    if (endDate && (!endQuote || !source.includes(squash(endQuote)) || endDate < (deadline as string))) endDate = null;
 
     let project: string | null = board.fields.project && t?.project ? String(t.project) : null;
     if (project && !(opts.projectOptions[board.key] || []).includes(project)) project = null;
@@ -625,7 +665,7 @@ export function validateDistilled(
       responsible = opts.team.find((m) => m.name.toLowerCase() === who || m.email === who)?.email || null;
     }
 
-    out.tasks.push({ board: board.key, title, context, deadline, deadlineQuote, project, urls, responsible });
+    out.tasks.push({ board: board.key, title, context, deadline, deadlineQuote, endDate, project, urls, responsible });
     out.notes.push(notes);
   }
   return out;
@@ -655,6 +695,8 @@ export interface DraftPayload {
   p: string | null;
   /** responsible person's email (meeting boards) */
   r?: string | null;
+  /** end date YYYY-MM-DD (events) */
+  e?: string | null;
 }
 
 /** Slack caps a button value at 2000 characters; trim the context, then the links, to fit. */
@@ -692,6 +734,7 @@ export function decodeDraft(value: string | undefined): DraftPayload | null {
       dq: typeof d.dq === "string" ? d.dq : null,
       p: typeof d.p === "string" && d.p ? d.p : null,
       r: typeof d.r === "string" && d.r ? d.r : null,
+      ...(isIsoDate(d.e) ? { e: d.e } : {}),
     };
   } catch {
     return null;
@@ -742,6 +785,7 @@ export function boardRef(b: TaskBoard): string {
 
 function cardHeader(board: TaskBoard | undefined, key: string): string {
   if (!board) return `📝 *Draft for ${esc(key)}*`;
+  if (board.kind === "list") return `📝 *Draft for the ${esc(board.label)}*`;
   return board.kind === "person" ? `📝 *Draft task for ${esc(board.name)}*` : `📝 *Draft for the ${esc(board.label)}*`;
 }
 
@@ -777,16 +821,17 @@ export function draftBlocks(
     fields.push({
       type: "datepicker",
       action_id: A.deadline,
-      placeholder: { type: "plain_text", text: "Deadline" },
+      placeholder: { type: "plain_text", text: board?.fields.deadlineLabel || "Deadline" },
       ...(d.d ? { initial_date: d.d } : {}),
     });
   }
   if (board?.fields.project && opts.projectOptions.length) {
-    const projOpts = [opt("No project", NONE), ...opts.projectOptions.slice(0, 99).map((p) => opt(p, p))];
+    const projWord = board.fields.projectLabel || "Project";
+    const projOpts = [opt(`No ${projWord.toLowerCase()}`, NONE), ...opts.projectOptions.slice(0, 99).map((p) => opt(p, p))];
     fields.push({
       type: "static_select",
       action_id: A.project,
-      placeholder: { type: "plain_text", text: "Project" },
+      placeholder: { type: "plain_text", text: projWord },
       options: projOpts,
       ...(d.p && opts.projectOptions.includes(d.p) ? { initial_option: opt(d.p, d.p) } : {}),
     });
@@ -805,7 +850,13 @@ export function draftBlocks(
   blocks.push({ type: "actions", block_id: "p9task_fields", elements: fields });
 
   const hints: string[] = [];
-  if (!board || board.fields.deadline) {
+  if (board?.kind === "list" && board.fields.deadlineLabel) {
+    const word = board.fields.deadlineLabel;
+    if (d.d && d.dq) hints.push(`${word} taken from “${esc(d.dq)}”.`);
+    else if (d.d) hints.push(`${word} set to ${prettyDate(d.d)}.`);
+    else hints.push(`⚠️ No date in the conversation. Pick the ${word.toLowerCase()} above.`);
+    if (d.d && d.e && d.e !== d.d) hints.push(`Ends ${prettyDate(d.e)}.`);
+  } else if (!board || board.fields.deadline) {
     if (d.d && d.dq) hints.push(`Deadline taken from “${esc(d.dq)}”.`);
     else if (d.d) hints.push(`Deadline set to ${prettyDate(d.d)}.`);
     else if (board?.kind === "meeting") hints.push("No deadline. Pick one above if it needs one.");
@@ -948,6 +999,7 @@ export function notionProperties(
     title: string;
     context: string;
     deadline: string | null;
+    endDate?: string | null;
     project: string | null;
     urls: string[];
     source: string | null;
@@ -972,6 +1024,8 @@ export function notionProperties(
     if (res.length) props[p.resources] = { rich_text: res };
   }
   if (p.deadline && f.deadline) props[p.deadline] = { date: { start: f.deadline } };
+  if (p.endDate && f.deadline && f.endDate && f.endDate >= f.deadline) props[p.endDate] = { date: { start: f.endDate } };
+  if (p.url && f.urls[0]) props[p.url] = { url: f.urls[0] };
   if (p.project && f.project) props[p.project] = p.projectType === "multi_select" ? { multi_select: [{ name: f.project }] } : { select: { name: f.project } };
   if (p.tag) props[p.tag.prop] = { multi_select: [{ name: p.tag.value }] };
   if (p.requester && f.requesterNotionId) props[p.requester] = { people: [{ id: f.requesterNotionId }] };
