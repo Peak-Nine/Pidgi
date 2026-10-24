@@ -221,7 +221,7 @@ describe("task capture flow", () => {
     expect(r.kind).toBe("handled");
     // In a channel, colleagues read along: Mothership isn't listed (Touchdown is open for adding).
     expect(slack.calls.update[0].text).toBe(
-      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda and the Team sync talking points so far. Which one should this go to?"
+      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda, the events list and the Team sync talking points so far. Which one should this go to?"
     );
     // In his DM with Pidgi they are.
     const dm = fakeSlack(THREAD);
@@ -232,7 +232,7 @@ describe("task capture flow", () => {
       undefined
     );
     expect(dm.calls.update[0].text).toBe(
-      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda, Mothership and the Team sync talking points so far. Which one should this go to?"
+      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda, Mothership, the events list and the Team sync talking points so far. Which one should this go to?"
     );
   });
 
@@ -313,9 +313,9 @@ describe("task capture flow", () => {
     );
     const prompt = claude.seen[0].messages[0].content as string;
     expect(prompt).not.toContain("mothership:");
-    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "touchdown", "team", "unknown"]);
+    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "touchdown", "events", "team", "unknown"]);
     expect(slack.calls.update[0].text).toBe(
-      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda and the Team sync talking points so far. Which one should this go to?"
+      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda, the events list and the Team sync talking points so far. Which one should this go to?"
     );
   });
 
@@ -442,6 +442,64 @@ describe("task capture flow", () => {
     const cardText = JSON.stringify(slack.calls.update[0].blocks);
     expect(cardText).not.toMatch(/mothership/i);
     expect(cardText).toContain("touchdown"); // open for adding, so it stays in the picker
+  });
+
+  it("puts an event on the events list with dates, link and the asker as Owner", async () => {
+    notionCalls.length = 0;
+    const thread = [
+      { ts: "1789000000.000100", user: "ULAURA", text: "Interesting: Impact Finance Summit, 12-13 November in Brussels <https://impactsummit.example.org/2026|site>" },
+      { ts: "1789000060.000200", user: "UNIELS", text: "<@UBOT> put this on the events list" },
+    ];
+    const slack = fakeSlack(thread);
+    const claude = fakeClaude({
+      is_task_request: true,
+      problem: "",
+      tasks: [
+        {
+          board: "events",
+          title: "Impact Finance Summit",
+          context: "Two days in Brussels; Laura flagged it.",
+          deadline: "2026-11-12",
+          deadline_quote: "12-13 November",
+          end_date: "2026-11-13",
+          end_date_quote: "12-13 November",
+          project: "",
+          responsible: "",
+          urls: ["https://impactsummit.example.org/2026"],
+        },
+      ],
+    });
+    const deps = { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: (u: string, r: string) => u === r };
+    await runTaskCapture(
+      slack,
+      deps,
+      { channel: "C1", ts: "1789000060.000200", thread_ts: "1789000000.000100", user: "UNIELS", text: "<@UBOT> put this on the events list" },
+      "1789000000.000100"
+    );
+    const card = slack.calls.update[0];
+    const text = JSON.stringify(card.blocks);
+    expect(text).toContain("Draft for the events list");
+    expect(text).toContain("Start date taken from");
+    expect(text).toContain("Ends ");
+
+    const actions: Record<string, any> = {};
+    registerTaskActions({ action: (id: any, fn: any) => (actions[String(id)] = fn), view: () => {} }, deps);
+    const createBtn = card.blocks.find((b: any) => b.block_id === "p9task_buttons").elements[0];
+    await actions["p9task_create"]({
+      ack: async () => {},
+      body: { user: { id: "UNIELS" }, channel: { id: "C1" }, message: { ts: "9.1", blocks: card.blocks }, state: { values: {} } },
+      action: createBtn,
+      client: slack,
+    });
+    const row = notionCalls[0];
+    expect(row.parent).toEqual({ database_id: "69cb02e89b0a44d987d9aaad4dd9c723" });
+    expect(row.properties["Event name"].title[0].text.content).toBe("Impact Finance Summit");
+    expect(row.properties["Start date"]).toEqual({ date: { start: "2026-11-12" } });
+    expect(row.properties["End date"]).toEqual({ date: { start: "2026-11-13" } });
+    expect(row.properties.Link).toEqual({ url: "https://impactsummit.example.org/2026" });
+    expect(row.properties.Owner).toEqual({ people: [{ id: "2d1d872b-594c-8145-ac7e-00025e996fbe" }] });
+    const done = JSON.stringify(slack.calls.update[slack.calls.update.length - 1].blocks);
+    expect(done).toContain("Added to the <https://www.notion.so/400c675ff9588184b591ce1f9373ff96|events list>");
   });
 
   it("puts a talking point on the team sync with the asker as Creator", async () => {

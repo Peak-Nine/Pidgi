@@ -149,6 +149,11 @@ A question about tasks ("what tasks does Laura have this week?", "what's on the 
 recognised as a question and goes to Pidgi's normal brain. Pidgi's general Notion tools are blocked from
 adding rows to any of these boards, so every new item passes through a draft card.
 
+**Events list.** Anyone can say "put this on the events list" (or "zet dit evenement op de lijst") in a thread
+about an event. The card fills Event name, Start date, End date (only when the dates are really in the
+conversation), Link (the first link from the thread), Theme, and Owner = whoever asked. It goes to the
+Events database on "Events worth attending"; Pidgi's Notion connection must be added to that database.
+
 **GTD (Niels only, DM only).** Niels's Notion AI meeting notes land in 🎙️ Recordings. In a DM with Pidgi:
 - `GTD` takes the newest recording that has content and no GTD yet,
 - `GTD GIZ` takes the newest recording whose title or meeting title has those words,
