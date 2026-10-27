@@ -162,6 +162,33 @@ export const DEFAULT_BOARDS: TaskBoard[] = [
     fields: PERSON_FIELDS,
   },
   {
+    key: "jonas",
+    kind: "person",
+    name: "Jonas",
+    label: "Jonas's board",
+    description: "Jonas's own work backlog (he is Peak Nine's co-founder). Topics Niels and Jonas need to discuss together go on the Touchdown agenda instead.",
+    aliases: ["jonas", "jonas burm", "jonas's magic board"],
+    email: "jonas@peaknine.studio",
+    // 🎹 Jonas's Magic Board → Backlog (same columns as Laura's)
+    databaseId: "8813eb7c68df44b8a402e2d8f1c6e3e1",
+    boardUrl: "https://www.notion.so/406c675ff958813b9327ff5b03efea41",
+    fields: PERSON_FIELDS,
+  },
+  {
+    key: "niels",
+    kind: "person",
+    name: "Niels",
+    label: "Niels's board",
+    description:
+      "Niels's Magic Board, where the team puts tasks for Niels (co-founder). When Niels asks for himself (\"for me\", \"my board\", \"my todos\"), use his Mothership instead if it is in the list.",
+    aliases: ["niels", "niels van espen", "niels's magic board", "niels's board"],
+    email: "niels@peaknine.studio",
+    // ☕ Niels's Magic Board → Backlog (same columns as Laura's). Shown live in Mothership as a linked tab.
+    databaseId: "f74c675ff9588294980d0175bfabc929",
+    boardUrl: "https://www.notion.so/406c675ff958811fafc1fbdf1f4dd111",
+    fields: PERSON_FIELDS,
+  },
+  {
     key: "touchdown",
     kind: "meeting",
     name: "Touchdown",
@@ -208,8 +235,8 @@ export const DEFAULT_BOARDS: TaskBoard[] = [
     kind: "person",
     name: "Mothership",
     label: "Mothership",
-    description: "Niels's own private to-do list (Pending Tasks). Only Niels uses it.",
-    aliases: ["mothership", "my mothership", "niels", "my board", "my todos", "my to-dos", "my list"],
+    description: "Niels's own private to-do list (Pending Tasks). Only Niels uses it: when Niels asks for himself (\"for me\", \"my board\", \"my todos\"), it goes here.",
+    aliases: ["mothership", "my mothership", "my board", "my todos", "my to-dos", "my list"],
     email: "niels@peaknine.studio",
     // 👾 Mothership → Pending Tasks. The database also shows the Touchdown agenda and the
     // Must Win Battle Board, so rows are written to the Pending Tasks data source itself.
