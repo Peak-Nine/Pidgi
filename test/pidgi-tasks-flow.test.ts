@@ -221,7 +221,7 @@ describe("task capture flow", () => {
     expect(r.kind).toBe("handled");
     // In a channel, colleagues read along: Mothership isn't listed (Touchdown is open for adding).
     expect(slack.calls.update[0].text).toBe(
-      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda, the events list and the Team sync talking points so far. Which one should this go to?"
+      "I can add things to Laura's board, Sankhya's board, Jonas's board, Niels's board, the Touchdown agenda, the events list and the Team sync talking points so far. Which one should this go to?"
     );
     // In his DM with Pidgi they are.
     const dm = fakeSlack(THREAD);
@@ -232,7 +232,7 @@ describe("task capture flow", () => {
       undefined
     );
     expect(dm.calls.update[0].text).toBe(
-      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda, Mothership, the events list and the Team sync talking points so far. Which one should this go to?"
+      "I can add things to Laura's board, Sankhya's board, Jonas's board, Niels's board, the Touchdown agenda, Mothership, the events list and the Team sync talking points so far. Which one should this go to?"
     );
   });
 
@@ -313,9 +313,9 @@ describe("task capture flow", () => {
     );
     const prompt = claude.seen[0].messages[0].content as string;
     expect(prompt).not.toContain("mothership:");
-    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "touchdown", "events", "team", "unknown"]);
+    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "jonas", "niels", "touchdown", "events", "team", "unknown"]);
     expect(slack.calls.update[0].text).toBe(
-      "I can add things to Laura's board, Sankhya's board, the Touchdown agenda, the events list and the Team sync talking points so far. Which one should this go to?"
+      "I can add things to Laura's board, Sankhya's board, Jonas's board, Niels's board, the Touchdown agenda, the events list and the Team sync talking points so far. Which one should this go to?"
     );
   });
 

@@ -232,7 +232,8 @@ describe("GTD run", () => {
     expect(prompt).toContain("Introductory Networking Call: Peak Nine & GIZ Namibia");
     expect(prompt).toContain("Niels to share the Peak Nine website URL via LinkedIn by Friday");
     expect(prompt).toContain("Only what Niels, Jonas, Sankhya or Laura must do");
-    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "touchdown", "mothership", "unknown"]);
+    expect(prompt).toContain("Jonas's own actions go on jonas");
+    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "jonas", "touchdown", "mothership", "unknown"]);
 
     // Header + two cards (the team sync item isn't a GTD board), all in the DM.
     expect(slack.calls.update[0].text).toContain("2 suggestions");

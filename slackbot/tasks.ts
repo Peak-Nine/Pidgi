@@ -493,14 +493,14 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
 
 // ── 3b. GTD: a meeting recording → cards ────────────────────────────────────
 
-/** The boards GTD proposes for: Niels's own, Touchdown (also Jonas's), Sankhya's and Laura's. */
-export const GTD_BOARDS = ["mothership", "touchdown", "sankhya", "laura"];
+/** The boards GTD proposes for: Niels's own (Mothership), Jonas's, Touchdown, Sankhya's and Laura's. */
+export const GTD_BOARDS = ["mothership", "jonas", "touchdown", "sankhya", "laura"];
 
 function gtdInstructions(recordedOn: string): string {
   return [
     "This is a meeting recording: Notion's AI summary and notes. Propose the KEY follow-ups for Peak Nine only:",
     "- Only what Niels, Jonas, Sankhya or Laura must do or decide. Leave out what people outside Peak Nine committed to, background and discussion.",
-    "- Niels's own actions go on mothership. Jonas's actions, and topics Niels and Jonas need to decide together, go on touchdown (responsible = Jonas or Niels). Sankhya's actions go on sankhya. Laura's actions (design, visuals, layout, content production) go on laura.",
+    "- Niels's own actions go on mothership. Jonas's own actions go on jonas. Topics Niels and Jonas need to discuss or decide together go on touchdown (responsible = Jonas or Niels). Sankhya's actions go on sankhya. Laura's actions (design, visuals, layout, content production) go on laura.",
     "- At most 5, most important first. If there is nothing concrete for these boards, return no tasks.",
     `- Relative dates in the recording ("Friday", "next week") are relative to the recording date, ${recordedOn}, not to today.`,
     "- Write each title and context in the language of the recording.",

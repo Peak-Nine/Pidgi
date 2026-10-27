@@ -149,6 +149,12 @@ A question about tasks ("what tasks does Laura have this week?", "what's on the 
 recognised as a question and goes to Pidgi's normal brain. Pidgi's general Notion tools are blocked from
 adding rows to any of these boards, so every new item passes through a draft card.
 
+**Jonas's and Niels's Magic Boards.** 🎹 Jonas's Magic Board and ☕ Niels's Magic Board work like Laura's
+and Sankhya's: open to the whole team, same columns. "Task for Jonas" goes to Jonas's board, "task for Niels"
+(from someone else) to Niels's board. When Niels asks for himself ("for me", "my board") it still goes to his
+private Mothership. Niels's Magic Board shows up inside Mothership as a linked tab, set up in Notion. In GTD,
+Jonas's own actions go to Jonas's board; Touchdown is for what Niels and Jonas need to decide together.
+
 **Events list.** Anyone can say "put this on the events list" (or "zet dit evenement op de lijst") in a thread
 about an event. The card fills Event name, Start date, End date (only when the dates are really in the
 conversation), Link (the first link from the thread), Theme, and Owner = whoever asked. It goes to the

@@ -213,7 +213,7 @@ describe("draft card", () => {
     const blocks = draftBlocks(draft(), { boards: DEFAULT_BOARDS, projectOptions: PROJECTS });
     const fields = blocks.find((b) => b.block_id === "p9task_fields");
     expect(fields.elements.map((e: any) => e.action_id)).toEqual(["p9task_owner", "p9task_deadline", "p9task_project"]);
-    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "touchdown", "mothership", "events", "team"]);
+    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "jonas", "niels", "touchdown", "mothership", "events", "team"]);
     expect(fields.elements[0].initial_option.value).toBe("laura");
     expect(fields.elements[1].initial_date).toBe("2026-10-23");
     expect(fields.elements[2].initial_option.value).toBe("Marketing");
@@ -247,7 +247,7 @@ describe("meeting board cards", () => {
   it("hides private boards from people outside the circle", () => {
     const blocks = draftBlocks(draft(), { boards: boardsFor("sankhya@peaknine.studio"), projectOptions: PROJECTS, team: DEFAULT_TEAM });
     const fields = blocks.find((b) => b.block_id === "p9task_fields");
-    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "events", "team"]);
+    expect(fields.elements[0].options.map((o: any) => o.value)).toEqual(["laura", "sankhya", "jonas", "niels", "events", "team"]);
   });
 });
 
@@ -286,7 +286,7 @@ describe("access to private boards", () => {
     expect(mentionsHiddenBoard("mothershipping", "")).toBe(false);
   });
   it("lets the whole team add to Touchdown, but not read it", () => {
-    expect(addableBoardsFor("laura@peaknine.studio").map((b) => b.key)).toEqual(["laura", "sankhya", "touchdown", "events", "team"]);
+    expect(addableBoardsFor("laura@peaknine.studio").map((b) => b.key)).toEqual(["laura", "sankhya", "jonas", "niels", "touchdown", "events", "team"]);
     expect(boardsFor("laura@peaknine.studio").map((b) => b.key)).not.toContain("touchdown");
     expect(hiddenNotionIds("laura@peaknine.studio")).toContain("2d5c675ff9588011ac09cd22663b3c68");
     expect(mentionsHiddenBoard("put this on the touchdown", "laura@peaknine.studio", undefined, { exceptAddable: true })).toBe(false);
@@ -316,6 +316,31 @@ describe("picker state", () => {
   });
   it("leaves the draft alone when the pickers were not touched", () => {
     expect(applyFieldState(draft(), readFieldState({}))).toEqual(draft());
+  });
+});
+
+describe("Jonas's and Niels's Magic Boards", () => {
+  it("are open to the whole team and never hidden", () => {
+    for (const who of ["laura@peaknine.studio", "sankhya@peaknine.studio", ""]) {
+      const keys = boardsFor(who).map((b) => b.key);
+      expect(keys).toEqual(expect.arrayContaining(["jonas", "niels"]));
+      expect(hiddenNotionIds(who)).not.toEqual(expect.arrayContaining(["8813eb7c68df44b8a402e2d8f1c6e3e1"]));
+      expect(hiddenNotionIds(who)).not.toEqual(expect.arrayContaining(["f74c675ff9588294980d0175bfabc929"]));
+    }
+  });
+  it("write to their own Backlog with Laura's columns", () => {
+    const jonas = DEFAULT_BOARDS.find((b) => b.key === "jonas")!;
+    const niels = DEFAULT_BOARDS.find((b) => b.key === "niels")!;
+    expect(jonas.databaseId).toBe("8813eb7c68df44b8a402e2d8f1c6e3e1");
+    expect(niels.databaseId).toBe("f74c675ff9588294980d0175bfabc929");
+    expect(jonas.fields).toBe(LAURA.fields);
+    expect(niels.fields).toBe(LAURA.fields);
+  });
+  it("keep 'niels' for Niels's board and 'my board' for his Mothership", () => {
+    const ms = DEFAULT_BOARDS.find((b) => b.key === "mothership")!;
+    expect(ms.aliases).not.toContain("niels");
+    expect(ms.aliases).toContain("my board");
+    expect(DEFAULT_BOARDS.find((b) => b.key === "niels")!.aliases).toContain("niels");
   });
 });
 
