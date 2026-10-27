@@ -10,6 +10,7 @@ It carries three playbooks, ported from the Peak Nine Claude skills:
 
 plus the voice rules (`00-voice.md`), the routing rules (`01-routing.md`), the credentials it may cite (`05-credentials.md`), the Teamleader constants (`06-teamleader.md`) and the Canva working rules (`07-canva.md`). Edit those Markdown files to change how Tendi works; no code change needed. Drop the full brand voice guidelines in as `08-voice-guidelines.md` and it is loaded on the next restart.
 
+
 ## What a proposal thread looks like
 
 1. DM Tendi, or @mention it in a channel, with the briefing: pasted text and/or a PDF or Word file attached in Slack.
@@ -93,6 +94,16 @@ What to expect, honestly:
 - Tool names come from Canva at runtime (prefixed `canva_`), so a change on Canva's side does not need a code change here.
 
 `tendi/.canva-oauth.json` (the script's output) is git-ignored. Treat it and the env value as passwords: they carry a Canva refresh token. `GET /canva/export?key=...` (only when `TENDI_ALLOW_TOKEN_EXPORT=1`) returns the hosted instance's current JSON if you ever need to move it.
+
+### Canva designs for the whole team
+
+Tendi has one Canva login (Niels's), so every design it makes is owned by that account. To let Jonas and the rest of the team open and edit them, Tendi files each new design into one shared Canva folder:
+
+1. In Canva, create a folder (for example "Tendi") inside the Peak Nine team space, or pick an existing one, and share it with the team with edit rights.
+2. Open the folder; its address is `canva.com/folder/FAH...`. Copy the `FAH...` part.
+3. On Render, set `TENDI_CANVA_FOLDER_ID` to that value on the Tendi service. Render redeploys.
+
+From then on every copy, new design, resize or merge Tendi makes is moved into that folder, and Tendi says so in the thread. `canva_status` shows the folder in `share_folder`. Designs made before this stay where they are; move those by hand.
 
 ## 4. Teamleader
 

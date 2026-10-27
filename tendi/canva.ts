@@ -187,6 +187,39 @@ export class FileOAuthProvider implements OAuthClientProvider {
   }
 }
 
+// ── shared folder ────────────────────────────────────────────────────────────
+//
+// Tendi has one Canva login (Niels's), so everything it makes is owned by that
+// account. To make the work visible to the whole team, every new design is filed
+// into one shared Canva folder: set TENDI_CANVA_FOLDER_ID to that folder's id (the
+// FAH... part of canva.com/folder/FAH...). Unset = designs stay where Canva puts them.
+
+/** Canva tools whose answer can contain a design Tendi just created. */
+export const CANVA_CREATING_TOOLS = new Set([
+  "copy-design",
+  "create-design",
+  "create-design-from-candidate",
+  "create-design-from-brand-template",
+  "merge-designs",
+  "resize-design",
+  "autofill-design",
+  "import-design-from-url",
+  "get-create-design-async-job",
+]);
+
+export function canvaShareFolderId(): string {
+  return (process.env.TENDI_CANVA_FOLDER_ID || "").trim();
+}
+
+/** Design ids in a Canva answer that were not in the request (so: new designs, not the source). */
+export function extractNewDesignIds(text: string, input: any): string[] {
+  const inInput = new Set((JSON.stringify(input || {}).match(/\bD[A-Za-z0-9_-]{9,12}\b/g) || []) as string[]);
+  const found = new Set<string>();
+  const patterns = [/"(?:design_id|designId|id)"\s*:\s*"(D[A-Za-z0-9_-]{9,12})"/g, /\/design\/(D[A-Za-z0-9_-]{9,12})\//g, /design[ _]id[^A-Za-z0-9]{1,6}(D[A-Za-z0-9_-]{9,12})\b/gi];
+  for (const re of patterns) for (const m of String(text || "").matchAll(re)) if (!inInput.has(m[1])) found.add(m[1]);
+  return [...found];
+}
+
 const CANVA_WRITE_PATTERN = /(copy|edit|commit|create|generate|import|upload|resize|autofill|comment|reply|move|delete|update|start[-_]editing|perform)/i;
 
 export function isCanvaWriteTool(name: string): boolean {
@@ -335,7 +368,9 @@ export class CanvaBridge {
         // turn a good answer (a page read, an edit result) into an error.
         const res: any = await this.client!.request({ method: "tools/call", params: { name: raw, arguments: input || {} } }, CallToolResultSchema, { timeout: 120_000 });
         const { text, images } = splitContent(res);
-        return { text: text || "(no content)", isError: !!res?.isError, ...(images.length ? { images } : {}) };
+        let out = text || "(no content)";
+        if (!res?.isError && CANVA_CREATING_TOOLS.has(raw)) out += await this.fileInShareFolder(out, input);
+        return { text: out, isError: !!res?.isError, ...(images.length ? { images } : {}) };
       } catch (e: any) {
         const msg = String(e?.message || e);
         console.error(`[canva] ${raw} failed (attempt ${attempt + 1}): ${msg.slice(0, 400)}`);
@@ -356,12 +391,43 @@ export class CanvaBridge {
     return { isError: true, text: `Canva tool ${raw} failed.` };
   }
 
-  status(): { configured: boolean; connected: boolean; has_tokens: boolean; tool_count: number; last_error: string | null } {
+  private filed = new Set<string>();
+
+  /** Move designs Tendi just created into the shared team folder. Returns a note for the model. */
+  private async fileInShareFolder(text: string, input: any): Promise<string> {
+    const folder = canvaShareFolderId();
+    if (!folder) return "";
+    const ids = extractNewDesignIds(text, input).filter((id) => !this.filed.has(id) && !MASTER_TEMPLATE_IDS.includes(id));
+    if (!ids.length) return "";
+    const moveRaw = [...this.rawNames.values()].find((r) => r === "move-item-to-folder");
+    if (!moveRaw || !this.client) return `\n\n[Tendi] Could not file ${ids.join(", ")} in the shared folder: Canva's move tool is not available. Tell the person to move it by hand.`;
+    const notes: string[] = [];
+    for (const id of ids) {
+      try {
+        const r: any = await this.client.request(
+          { method: "tools/call", params: { name: moveRaw, arguments: { item_id: id, to_folder_id: folder, user_intent: "File the design Tendi just made in the shared Peak Nine folder so the whole team can open it" } } },
+          CallToolResultSchema,
+          { timeout: 60_000 },
+        );
+        if (r?.isError) notes.push(`could not file ${id} in the shared folder (${splitContent(r).text.slice(0, 200)})`);
+        else {
+          this.filed.add(id);
+          notes.push(`${id} filed in the shared Peak Nine Canva folder, so Jonas and the team can open and edit it`);
+        }
+      } catch (e: any) {
+        notes.push(`could not file ${id} in the shared folder (${String(e?.message || e).slice(0, 200)})`);
+      }
+    }
+    return `\n\n[Tendi] ${notes.join("; ")}.`;
+  }
+
+  status(): { configured: boolean; connected: boolean; has_tokens: boolean; tool_count: number; share_folder: string | null; last_error: string | null } {
     return {
       configured: canvaConfigured(),
       connected: this.connected(),
       has_tokens: this.provider.hasTokens(),
       tool_count: this.tools.length,
+      share_folder: canvaShareFolderId() || null,
       last_error: this.lastError,
     };
   }

@@ -143,3 +143,13 @@ describe("tender_board accepts the card in any shape", () => {
     expect(boardCardFromInput({ action: "add", card: "not json" })).toEqual({});
   });
 });
+
+describe("Canva designs land in the shared folder", () => {
+  it("finds the new design id and ignores the source design", async () => {
+    const { extractNewDesignIds } = await import("../tendi/canva.js");
+    const answer = JSON.stringify({ design: { design_id: "DAHZ1abcDEF", urls: { edit_url: "https://www.canva.com/design/DAHZ1abcDEF/xyz/edit" } } });
+    expect(extractNewDesignIds(answer, { design_id: "DAHWFiZkv6w" })).toEqual(["DAHZ1abcDEF"]);
+    expect(extractNewDesignIds('{"design_id":"DAHWFiZkv6w"}', { design_id: "DAHWFiZkv6w" })).toEqual([]);
+    expect(extractNewDesignIds("folder FAHIyI2IifE created", {})).toEqual([]);
+  });
+});
