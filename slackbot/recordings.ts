@@ -12,7 +12,7 @@
  * readable, the reply says which block types it saw, so we know what the API returns.
  */
 import { notionDataSourceClient } from "./notion.js";
-import { normId } from "./taskboards.js";
+import { normId, todayBrussels } from "./taskboards.js";
 
 export const RECORDINGS = {
   databaseId: "402c675ff958800990a0d32640656e2a",
@@ -26,6 +26,8 @@ export interface GtdRequest {
   query: string | null;
   /** A recording named by its Notion link. */
   pageId: string | null;
+  /** "GTD today": every recording of today without GTD on it yet. */
+  today?: boolean;
 }
 
 /**
@@ -37,6 +39,7 @@ export function parseGtd(text: string): GtdRequest | null {
   const m = /^[\s\-–—:,.!*_~>]*gtd\b[\s:,.!*_~-]*([\s\S]*)$/i.exec(t);
   if (!m) return null;
   let rest = m[1].trim();
+  if (/^(today|vandaag)[.!]?$/i.test(rest)) return { query: null, pageId: null, today: true };
   let pageId: string | null = null;
   const link = /<?(https?:\/\/[^\s|>]*notion\.(?:so|com|site)[^\s|>]*)(?:\|[^>]*)?>?/i.exec(rest);
   if (link) {
@@ -85,6 +88,8 @@ export interface RecordingRow {
 }
 
 export interface RecordingContent {
+  /** The full transcript (empty when Notion didn't give one), capped at TRANSCRIPT_MAX characters. */
+  transcript: string;
   /** The meeting's own title (from the meeting-notes block), else the row title. */
   title: string;
   text: string;
@@ -170,11 +175,19 @@ export async function readRecording(pageId: string, fallbackTitle = ""): Promise
   }
 
   await walk(pageId, 0, main);
-  let text = main.join("\n");
-  // The transcript only when there is no summary to work from (it is long and noisy).
-  if (!text.trim() && transcript.length) text = `Transcript:\n${transcript.join("\n")}`;
-  return { title: title || fallbackTitle, text: text.slice(0, 40000), blockTypes: Array.from(types) };
+  return {
+    title: title || fallbackTitle,
+    text: main.join("\n").slice(0, 40000),
+    transcript: transcript.join("\n").slice(0, TRANSCRIPT_MAX),
+    blockTypes: Array.from(types),
+  };
 }
+
+/** About 50k tokens: an hour-long meeting fits whole. */
+export const TRANSCRIPT_MAX = 200000;
+
+/** Is there anything to work from: a summary or notes, or a transcript? */
+export const hasContent = (c: RecordingContent) => !!(c.text.trim() || c.transcript.trim());
 
 /** Tick the GTD box; add the column first if it isn't there. False when Notion refuses both. */
 export async function markDone(row: RecordingRow): Promise<boolean> {
@@ -225,7 +238,7 @@ export async function pickRecording(req: GtdRequest): Promise<Pick> {
       if (!inRecordings(page)) return { ok: false, reason: "not_in_recordings" };
       const row = rowFrom(page);
       const content = await readRecording(row.id, row.title);
-      if (!content.text.trim()) return { ok: false, reason: "unreadable", detail: content.blockTypes.join(", ") || "nothing" };
+      if (!hasContent(content)) return { ok: false, reason: "unreadable", detail: content.blockTypes.join(", ") || "nothing" };
       return { ok: true, row, content };
     }
 
@@ -237,7 +250,7 @@ export async function pickRecording(req: GtdRequest): Promise<Pick> {
       if (reads++ >= (req.query ? 15 : 10)) break;
       const content = await readRecording(row.id, row.title);
       const named = !!req.query && matchesQuery(`${row.title}\n${content.title}`, req.query);
-      if (!content.text.trim()) {
+      if (!hasContent(content)) {
         // A named recording we can't read: say so, rather than "no match".
         if (named) return { ok: false, reason: "unreadable", detail: content.blockTypes.join(", ") || "nothing" };
         lastEmpty = content;
@@ -252,6 +265,24 @@ export async function pickRecording(req: GtdRequest): Promise<Pick> {
       return { ok: false, reason: "unreadable", detail: lastEmpty.blockTypes.join(", ") };
     }
     return { ok: false, reason: "none_left" };
+  } catch (e: any) {
+    if (isAccessError(e)) return { ok: false, reason: "no_access", detail: String(e?.code || e?.message || e) };
+    throw e;
+  }
+}
+
+/** "GTD today": today's recordings (Brussels date) with content and no GTD yet, oldest first. */
+export async function pickTodaysRecordings(max = 8): Promise<{ ok: true; items: { row: RecordingRow; content: RecordingContent }[] } | Extract<Pick, { ok: false }>> {
+  try {
+    const today = todayBrussels();
+    const rows = (await listRecordings(40)).filter((r) => r.created && todayBrussels(new Date(r.created)) === today && !r.done && !doneHere.has(r.id));
+    const items: { row: RecordingRow; content: RecordingContent }[] = [];
+    for (const row of rows.reverse()) {
+      if (items.length >= max) break;
+      const content = await readRecording(row.id, row.title);
+      if (hasContent(content)) items.push({ row, content });
+    }
+    return items.length ? { ok: true, items } : { ok: false, reason: "none_left" };
   } catch (e: any) {
     if (isAccessError(e)) return { ok: false, reason: "no_access", detail: String(e?.code || e?.message || e) };
     throw e;

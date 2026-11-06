@@ -42,7 +42,8 @@ import { notionEnabled, notionToolDefs, handleNotionTool } from "./notion.js";
 import { renderShell, gatherDashboardData, gatherFinanceData, dashboardLink } from "./dashboard.js";
 import { recordUsage, summarizeUsage } from "./usage.js";
 import { saveFormValue, loadFormValue, formsPersistent } from "./formstore.js";
-import { runTaskCapture, runGtd, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
+import { runTaskCapture, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
+import { runGtd, registerGtdActions } from "./gtd.js";
 import { parseGtd, bareNotionLink, isRecordingPage } from "./recordings.js";
 import {
   looksLikeTaskRequest,
@@ -1062,6 +1063,7 @@ async function main(): Promise<void> {
       canConfirm: (userId: string, requesterId: string) => userId === requesterId || writeAllowed(userId),
     };
     registerTaskActions(app, taskDeps);
+    registerGtdActions(app, taskDeps);
     console.log("Task capture enabled (draft card → ✅ → Notion board).");
   } else {
     console.log("Task capture disabled (needs NOTION_TOKEN).");
