@@ -623,7 +623,8 @@ export interface Distilled {
   unknownBoard: boolean;
 }
 
-function squash(s: string): string {
+/** Lowercase, quotes removed, whitespace collapsed: for checking that a quote is really in a text. */
+export function squash(s: string): string {
   return String(s || "")
     .toLowerCase()
     .replace(/[“”"'‘’]/g, "")
@@ -797,7 +798,7 @@ function linkLabel(url: string): string {
   }
 }
 
-function esc(s: string): string {
+export function esc(s: string): string {
   return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 

@@ -163,10 +163,31 @@ Events database on "Events worth attending"; Pidgi's Notion connection must be a
 **GTD (Niels only, DM only).** Niels's Notion AI meeting notes land in 🎙️ Recordings. In a DM with Pidgi:
 - `GTD` takes the newest recording that has content and no GTD yet,
 - `GTD GIZ` takes the newest recording whose title or meeting title has those words,
-- `GTD <notion link>` takes that recording (only if it is in Recordings).
-Pidgi reads the summary (the transcript only when there is no summary), proposes at most 5 key follow-ups
-for Mothership (Niels), Touchdown (Jonas, or Niels and Jonas together), Sankhya's and Laura's boards, posts them as
-draft cards in the DM, and ticks the recording's GTD checkbox (it adds that column if it is missing).
+- `GTD <notion link>` takes that recording (only if it is in Recordings),
+- `GTD today` (or `GTD vandaag`) takes every recording from today without GTD yet, oldest first, one overview each.
+
+How it works:
+1. Pidgi reads the summary, the notes and the full transcript (up to 200,000 characters).
+2. Claude makes two passes. The first lists every follow-up. The second rereads the recording, adds what was
+   missed, drops duplicates and things that aren't tasks, and flags items that look like an open task already on
+   a board (only boards the person asking may read).
+3. Every suggestion carries a word-for-word quote from the recording. Pidgi checks that quote in code: no quote
+   found, no suggestion. A deadline needs its own quote too.
+4. One overview message per recording, grouped per board (Mothership, Jonas's board, Touchdown, Sankhya's and
+   Laura's boards), with checkboxes. Likely duplicates start unticked. "✏️ Edit a task" changes title,
+   context, board or deadline; "✅ Add selected" writes the ticked ones with the quote and a link to the
+   recording; "Discard the rest" closes it. Only the person who ran GTD can use the buttons.
+5. The overview shows how many came from each pass, how many were dropped, and the approximate cost of the run.
+
+The recording's GTD checkbox is ticked once its overview is up (Pidgi adds that column if it is missing). If a
+pass fails, the recording is not ticked, so `GTD` picks it up again.
+
+Settings (optional, in Render env): `GTD_MODEL` (default `claude-opus-5-5`) and `GTD_EFFORT` (default `high`).
+The cost shown is an estimate from token counts and list prices; the Anthropic console has the real figure.
+
+Overviews are stored in Pidgi's data folder (`PIDGI_DATA_DIR`, or `/var/data` on a Render disk). Without a
+persistent disk, a redeploy forgets open overviews and their buttons answer "This overview has expired".
+
 Recordings is on Niels's private list, so nobody else can read it through Pidgi. In a channel, GTD
 answers that it only works in a DM.
 

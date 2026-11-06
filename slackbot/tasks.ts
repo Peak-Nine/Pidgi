@@ -21,7 +21,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { notionClient, notionDataSourceClient } from "./notion.js";
 import { recordUsage } from "./usage.js";
-import { GtdRequest, markDone, pickProblem, pickRecording } from "./recordings.js";
 import {
   A,
   DraftPayload,
@@ -32,7 +31,6 @@ import {
   boardOf,
   boardRef,
   addableBoardsFor,
-  boardsFor,
   canAddTo,
   calendarLines,
   canUseBoard,
@@ -49,7 +47,6 @@ import {
   loadTeam,
   mentionsHiddenBoard,
   PRIVATE_REPLY,
-  prettyDate,
   scrubPrivate,
   mentionedUserIds,
   notionChildren,
@@ -85,13 +82,13 @@ export type CaptureResult =
   | { kind: "handled"; summary: string; private?: boolean }
   | { kind: "not_task"; ack: { channel: string; ts: string } | null };
 
-const BOARDS: TaskBoard[] = loadBoards();
-const TEAM: TeamMember[] = loadTeam();
+export const BOARDS: TaskBoard[] = loadBoards();
+export const TEAM: TeamMember[] = loadTeam();
 
 // ── Small caches ────────────────────────────────────────────────────────────
 
 const nameCache = new Map<string, { name: string; email: string }>();
-async function person(client: any, userId: string): Promise<{ name: string; email: string }> {
+export async function person(client: any, userId: string): Promise<{ name: string; email: string }> {
   if (!userId) return { name: "someone", email: "" };
   const hit = nameCache.get(userId);
   if (hit) return hit;
@@ -112,7 +109,7 @@ async function person(client: any, userId: string): Promise<{ name: string; emai
 
 const schemaCache = new Map<string, { at: number; projects: string[] }>();
 /** Project options straight from the board's Notion schema (cached 10 minutes). */
-async function projectOptions(board: TaskBoard | undefined): Promise<string[]> {
+export async function projectOptions(board: TaskBoard | undefined): Promise<string[]> {
   if (!board?.fields.project) return [];
   const hit = schemaCache.get(board.databaseId);
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.projects;
@@ -130,7 +127,7 @@ async function projectOptions(board: TaskBoard | undefined): Promise<string[]> {
   }
 }
 
-async function projectOptionsByBoard(boards: TaskBoard[]): Promise<Record<string, string[]>> {
+export async function projectOptionsByBoard(boards: TaskBoard[]): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = {};
   await Promise.all(boards.map(async (b) => (out[b.key] = await projectOptions(b))));
   return out;
@@ -145,7 +142,7 @@ function shownBoards(boards: TaskBoard[], channel: string, currentKey?: string):
   return boards.filter((b) => !isRestrictedBoard(b) || b.openForAdding || b.key === currentKey);
 }
 
-function slackError(e: any): string {
+export function slackError(e: any): string {
   return String(e?.data?.error || e?.message || e);
 }
 
@@ -491,123 +488,56 @@ export async function runTaskCapture(client: any, deps: TaskDeps, ev: TaskEvent,
   };
 }
 
-// ── 3b. GTD: a meeting recording → cards ────────────────────────────────────
-
-/** The boards GTD proposes for: Niels's own (Mothership), Jonas's, Touchdown, Sankhya's and Laura's. */
-export const GTD_BOARDS = ["mothership", "jonas", "touchdown", "sankhya", "laura"];
-
-function gtdInstructions(recordedOn: string): string {
-  return [
-    "This is a meeting recording: Notion's AI summary and notes. Propose the KEY follow-ups for Peak Nine only:",
-    "- Only what Niels, Jonas, Sankhya or Laura must do or decide. Leave out what people outside Peak Nine committed to, background and discussion.",
-    "- Niels's own actions go on mothership. Jonas's own actions go on jonas. Topics Niels and Jonas need to discuss or decide together go on touchdown (responsible = Jonas or Niels). Sankhya's actions go on sankhya. Laura's actions (design, visuals, layout, content production) go on laura.",
-    "- At most 5, most important first. If there is nothing concrete for these boards, return no tasks.",
-    `- Relative dates in the recording ("Friday", "next week") are relative to the recording date, ${recordedOn}, not to today.`,
-    "- Write each title and context in the language of the recording.",
-  ].join("\n");
-}
-
 /**
- * "GTD" in Niels's DM: find the recording (the last one without GTD on yet, or the one named),
- * distil it into cards for his boards and post them in the DM. The recording is then ticked as done.
+ * Write one draft as a row on its board: checks the project against the board, fills in who asked
+ * and who picks it up, and writes through the data source for a multi-source board (Mothership).
+ * Used by "Add to board" on a single card and by "Add selected" on a GTD overview.
+ * The caller has already checked that the clicker may add to this board.
  */
-export async function runGtd(client: any, deps: TaskDeps, ev: TaskEvent, req: GtdRequest, replyThreadTs?: string): Promise<CaptureResult> {
-  // Pidgi's DM is an agent chat where every conversation is a thread: reply in it, or the
-  // messages land outside the conversation Niels is looking at.
-  const thread = replyThreadTs || ev.thread_ts;
-  const requester = await person(client, ev.user);
-  let ack: { channel: string; ts: string } | null = null;
-  try {
-    const r: any = await client.chat.postMessage({ channel: ev.channel, thread_ts: thread, text: "🎙️ Looking for your recording…" });
-    if (r?.ts) ack = { channel: r.channel || ev.channel, ts: r.ts };
-  } catch {
-    /* carry on without a placeholder */
-  }
-  const say = async (text: string, blocks?: any[]) => {
-    if (ack) {
-      try {
-        await client.chat.update({ channel: ack.channel, ts: ack.ts, text, ...(blocks ? { blocks } : {}) });
-        ack = null;
-        return;
-      } catch {
-        /* fall through to a new message */
-      }
+export async function writeDraft(client: any, board: TaskBoard, d: DraftPayload): Promise<{ page: any; project: string | null; people: string[]; notes: string[] }> {
+  const notes: string[] = [];
+  let project = board.fields.project ? d.p : null;
+  if (project) {
+    const options = await projectOptions(board);
+    if (options.length && !options.includes(project)) {
+      notes.push(`“${project}” isn't a project on ${boardRef(board)}, so I left Project empty.`);
+      project = null;
     }
-    await client.chat.postMessage({ channel: ev.channel, thread_ts: thread, text, ...(blocks ? { blocks } : {}) });
-  };
+  }
 
-  let pick;
-  try {
-    pick = await pickRecording(req);
-  } catch (e: any) {
-    const msg = `I couldn't read your recordings just now (${e?.code || e?.message || e}). Try again in a minute.`;
-    await say(msg);
-    return { kind: "handled", summary: msg, private: true };
+  const requester = await person(client, d.q);
+  const people: string[] = [];
+  let requesterNotionId: string | null = null;
+  if (board.fields.requester) {
+    requesterNotionId = notionIdFor(TEAM, requester.email);
+    if (requesterNotionId) people.push(`${board.fields.requester}: ${requester.name}`);
+    else notes.push(`I couldn't match ${requester.name} to a Notion user, so ${board.fields.requester} is empty.`);
   }
-  if (!pick.ok) {
-    const msg = pickProblem(pick);
-    await say(msg);
-    return { kind: "handled", summary: msg, private: true };
+  let assigneeNotionId: string | null = null;
+  if (board.fields.assignee) {
+    const email = board.kind === "person" ? board.email || null : d.r || null;
+    assigneeNotionId = notionIdFor(TEAM, email);
+    const who = TEAM.find((m) => m.email === email);
+    if (assigneeNotionId && who) people.push(`${board.fields.assignee}: ${who.name}`);
   }
-  const { row, content } = pick;
-  const recordedOn = row.created ? todayBrussels(new Date(row.created)) : todayBrussels();
-  const g: Gathered = {
-    transcript: content.text,
-    mode: "meeting recording",
-    sourceLink: row.url,
-    channelName: `the Notion recording "${content.title}" of ${prettyDate(recordedOn)}`,
-    request: "GTD: turn this meeting recording into tasks",
-    sourceText: `${content.text}\nGTD`,
-  };
-  const boards = boardsFor(requester.email, BOARDS).filter((b) => GTD_BOARDS.includes(b.key));
-  const projects = await projectOptionsByBoard(boards);
 
-  let raw: any;
-  try {
-    raw = await distil(deps, { g, requesterName: requester.name, today: todayBrussels(), boards, projects, instructions: gtdInstructions(recordedOn) });
-  } catch (e: any) {
-    const msg = `I couldn't distil *${content.title}* just now (${e?.message || e}). Try again in a minute.`;
-    await say(msg);
-    return { kind: "handled", summary: msg, private: true };
-  }
-  const result = validateDistilled({ ...(raw || {}), is_task_request: true }, { boards, projectOptions: projects, team: TEAM, sourceText: g.sourceText, today: todayBrussels() });
-  // Ticked only once the answer is posted, so a run that fails never hides a recording.
-  const tick = async () => ((await markDone(row)) ? "" : "I couldn't tick its GTD box in Notion: add a checkbox column called GTD to 🎙️ Recordings.");
-
-  if (!result.tasks.length) {
-    const msg = `Nothing concrete for your boards in *<${row.url}|${content.title}>*.`;
-    await say(msg);
-    const note = await tick();
-    if (note) await say(note);
-    return { kind: "handled", summary: msg, private: true };
-  }
-  const n = result.tasks.length;
-  await say(`From *<${row.url}|${content.title}>* (${prettyDate(recordedOn)}): ${n === 1 ? "one suggestion" : `${n} suggestions`}. Nothing lands on a board until you click ✅.`);
-  const titles: string[] = [];
-  for (let i = 0; i < n; i++) {
-    const t = result.tasks[i];
-    const d: DraftPayload = {
-      v: 1,
-      t: t.title,
-      c: t.context,
-      u: t.urls,
-      s: row.url,
-      q: ev.user,
-      a: t.board,
-      d: t.deadline,
-      dq: t.deadlineQuote,
-      e: t.endDate || null,
-      p: t.project,
-      r: t.responsible,
-    };
-    const blocks = draftBlocks(d, { boards, projectOptions: projects[d.a] || [], team: TEAM, notes: result.notes[i] || [] });
-    await say(draftFallbackText(d, boards), blocks);
-    const b = boardOf(boards, t.board);
-    titles.push(`"${t.title}" for ${b ? boardRef(b) : t.board}`);
-  }
-  const note = await tick();
-  if (note) await say(note);
-  return { kind: "handled", summary: `GTD on "${content.title}": I drafted ${titles.join("; ")}.`, private: true };
+  // A board with several data sources (Mothership) is written through its data source.
+  const page: any = await (board.dataSourceId ? notionDataSourceClient() : notionClient()).pages.create({
+    parent: board.dataSourceId ? { type: "data_source_id", data_source_id: board.dataSourceId } : { database_id: board.databaseId },
+    properties: notionProperties(board, {
+      title: d.t,
+      context: d.c,
+      deadline: board.fields.deadline ? d.d : null,
+      endDate: board.fields.endDate ? d.e || null : null,
+      project,
+      urls: d.u,
+      source: d.s,
+      requesterNotionId,
+      assigneeNotionId,
+    }),
+    children: notionChildren(board, { context: d.c, urls: d.u, requesterName: requester.name, today: todayBrussels(), source: d.s, deadlineQuote: d.dq }),
+  } as any);
+  return { page, project, people, notes };
 }
 
 // ── 4. Buttons, pickers and the edit modal ──────────────────────────────────
@@ -691,48 +621,7 @@ export function registerTaskActions(app: any, deps: TaskDeps): void {
       if (!canAddTo(board, clicker.email)) return ephemeral(client, body, PRIVATE_REPLY);
       const canRead = canUseBoard(board, clicker.email);
 
-      const notes: string[] = [];
-      let project = board.fields.project ? d.p : null;
-      if (project) {
-        const options = await projectOptions(board);
-        if (options.length && !options.includes(project)) {
-          notes.push(`“${project}” isn't a project on ${boardRef(board)}, so I left Project empty.`);
-          project = null;
-        }
-      }
-
-      const requester = await person(client, d.q);
-      const people: string[] = [];
-      let requesterNotionId: string | null = null;
-      if (board.fields.requester) {
-        requesterNotionId = notionIdFor(TEAM, requester.email);
-        if (requesterNotionId) people.push(`${board.fields.requester}: ${requester.name}`);
-        else notes.push(`I couldn't match ${requester.name} to a Notion user, so ${board.fields.requester} is empty.`);
-      }
-      let assigneeNotionId: string | null = null;
-      if (board.fields.assignee) {
-        const email = board.kind === "person" ? board.email || null : d.r || null;
-        assigneeNotionId = notionIdFor(TEAM, email);
-        const who = TEAM.find((m) => m.email === email);
-        if (assigneeNotionId && who) people.push(`${board.fields.assignee}: ${who.name}`);
-      }
-
-      // A board with several data sources (Mothership) is written through its data source.
-      const page: any = await (board.dataSourceId ? notionDataSourceClient() : notionClient()).pages.create({
-        parent: board.dataSourceId ? { type: "data_source_id", data_source_id: board.dataSourceId } : { database_id: board.databaseId },
-        properties: notionProperties(board, {
-          title: d.t,
-          context: d.c,
-          deadline: board.fields.deadline ? d.d : null,
-          endDate: board.fields.endDate ? d.e || null : null,
-          project,
-          urls: d.u,
-          source: d.s,
-          requesterNotionId,
-          assigneeNotionId,
-        }),
-        children: notionChildren(board, { context: d.c, urls: d.u, requesterName: requester.name, today: todayBrussels(), source: d.s, deadlineQuote: d.dq }),
-      } as any);
+      const { page, project, people, notes } = await writeDraft(client, board, d);
 
       await client.chat.update({
         channel,

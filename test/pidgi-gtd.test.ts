@@ -1,8 +1,15 @@
 /**
- * GTD: "GTD" in Niels's DM → the last recording without GTD on yet (or the one named) →
- * draft cards for Mothership, Touchdown and Sankhya, with fake Notion, Slack and Claude.
+ * GTD: "GTD" in Niels's DM → the recording (summary, notes and full transcript) → two Claude
+ * passes → one overview message with checkboxes per board → "Add selected" writes the ticked
+ * ones. With fake Notion, Slack and Claude.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import os from "os";
+import fs from "fs";
+import path from "path";
+
+process.env.PIDGI_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pidgi-gtd-"));
+const MS_DS = "2d3c675ff9588031805c000b7f320c36"; // Mothership's Pending Tasks
 
 const RDS = "402c675ff958802b865a000b1f175a8c"; // 🎙️ Recordings data source
 const n = (id: string) => String(id).replace(/-/g, "").toLowerCase();
@@ -15,6 +22,9 @@ const updates: any[] = [];
 const created: any[] = [];
 let schemaPatched = false;
 let listError: any = null;
+// Rows already on the boards, by database id (Mothership by key), for the duplicate check.
+const titled = (prop: string, title: string, extra: any = {}) => ({ properties: { [prop]: { type: "title", title: [{ plain_text: title }] }, ...extra } });
+const OPEN: Record<string, any[]> = {};
 
 function row(id: string, title: string, created_time: string, done = false) {
   return {
@@ -43,6 +53,7 @@ const fakeNotion = {
       return { results: ROWS.slice(0, body.page_size) };
     }
     if (path === `data_sources/${RDS}` && method === "patch") return (schemaPatched = true), {};
+    if (path === `data_sources/${MS_DS}/query`) return { results: OPEN.mothership };
     if (path.startsWith("data_sources/")) return { properties: { Project: { multi_select: { options: [{ name: "P9 - Sales" }, { name: "Enabel" }] } } } };
     throw new Error(`unexpected ${method} ${path}`);
   },
@@ -63,15 +74,18 @@ const fakeNotion = {
 vi.mock("../slackbot/notion.js", () => ({
   notionDataSourceClient: () => fakeNotion,
   notionClient: () => ({
-    databases: { retrieve: async () => ({ properties: { Project: { select: { options: [{ name: "Takeda" }] } } } }) },
+    databases: {
+      retrieve: async () => ({ properties: { Project: { select: { options: [{ name: "Takeda" }] } } } }),
+      query: async ({ database_id }: any) => ({ results: OPEN[database_id] || [] }),
+    },
     pages: { create: async (args: any) => (created.push(args), { id: "new", url: "https://www.notion.so/new" }) },
   }),
 }));
 vi.mock("../slackbot/usage.js", () => ({ recordUsage: () => {} }));
 
-import { parseGtd, matchesQuery, readRecording, pickRecording, pickProblem, bareNotionLink, isRecordingPage } from "../slackbot/recordings.js";
-import { runGtd, registerTaskActions } from "../slackbot/tasks.js";
-import { hiddenNotionIds } from "../slackbot/taskboards.js";
+import { parseGtd, matchesQuery, readRecording, pickRecording, pickProblem, bareNotionLink, isRecordingPage, hasContent } from "../slackbot/recordings.js";
+import { runGtd, registerGtdActions, validateGtd, quoteFound, isClosed, selectedFromState, priceOf, G } from "../slackbot/gtd.js";
+import { hiddenNotionIds, DEFAULT_BOARDS, DEFAULT_TEAM } from "../slackbot/taskboards.js";
 
 const USERS: Record<string, any> = {
   UNIELS: { real_name: "Niels Van Espen", profile: { email: "niels@peaknine.studio" } },
@@ -90,10 +104,23 @@ function fakeSlack() {
     },
   };
 }
-function fakeClaude(input: any) {
+/** Fake Claude for GTD: answers each streamed request with the next JSON in `replies`. */
+function fakeClaude(replies: any[]) {
   const seen: any[] = [];
-  return { seen, messages: { create: async (req: any) => (seen.push(req), { content: [{ type: "tool_use", name: "submit_tasks", input }], usage: {} }) } };
+  const stream = (req: any) => {
+    seen.push(req);
+    const r = replies.shift();
+    return {
+      finalMessage: async () => {
+        if (r instanceof Error) throw r;
+        return { model: req.model, stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(r) }], usage: { input_tokens: 20000, output_tokens: 1500, cache_read_input_tokens: 0 } };
+      },
+    };
+  };
+  return { seen, messages: { stream }, beta: { messages: { stream } } };
 }
+const deps = (claude: any) => ({ anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: (u: string, r: string) => u === r });
+const task = (o: any) => ({ board: "mothership", title: "x", context: "", evidence: "", deadline: "", deadline_quote: "", project: "", responsible: "", ...o });
 
 beforeEach(() => {
   ROWS.length = 0;
@@ -102,6 +129,7 @@ beforeEach(() => {
   created.length = 0;
   schemaPatched = false;
   listError = null;
+  for (const k of Object.keys(OPEN)) delete OPEN[k];
   // Newest first, like the real query.
   ROWS.push(row("aaaa0000000000000000000000000003", "Meeting ‣", "2026-10-23T14:00:00Z")); // empty
   ROWS.push(row("aaaa0000000000000000000000000002", "Meeting ‣", "2026-10-23T09:18:00Z"));
@@ -111,7 +139,12 @@ beforeEach(() => {
     "aaaa0000000000000000000000000002",
     "Introductory Networking Call: Peak Nine & GIZ Namibia",
     ["### Action Items", "- [ ] Marie to introduce Peak Nine to the GIZ project manager", "- [ ] Niels to share the Peak Nine website URL via LinkedIn by Friday"],
-    ["Marie: hello", "Niels: hi"]
+    [
+      "Marie: hello, thanks for making time today.",
+      "Niels: I will share the Peak Nine website link with you on LinkedIn by Friday.",
+      "Niels: And Laura could make a one-pager on Proof of Change that you can pass on to the project manager.",
+      "Marie: Great, I will introduce you to the SME project manager next week.",
+    ]
   );
   meeting("aaaa0000000000000000000000000001", "Bourguignon Strategy Review", ["### Action Items", "- [ ] Jonas to send the budget"], []);
 });
@@ -144,6 +177,11 @@ describe("parseGtd", () => {
     expect(parseGtd("GTD recording")).toEqual({ query: null, pageId: null }); // just "the latest"
     expect(parseGtd("GTD laatste opname")).toEqual({ query: null, pageId: null });
   });
+  it("understands GTD today", () => {
+    expect(parseGtd("GTD today")).toEqual({ query: null, pageId: null, today: true });
+    expect(parseGtd("<@UBOT> - gtd vandaag")).toEqual({ query: null, pageId: null, today: true });
+    expect(parseGtd("GTD today's GIZ call")?.today).toBeUndefined();
+  });
   it("ignores anything that doesn't start with GTD", () => {
     expect(parseGtd("let's go")).toBeNull();
     expect(parseGtd("what is gtd?")).toBeNull();
@@ -156,18 +194,20 @@ describe("parseGtd", () => {
 });
 
 describe("reading a recording", () => {
-  it("follows the meeting-notes pointers: summary in, transcript out", async () => {
+  it("reads the summary and notes, and the full transcript separately", async () => {
     const c = await readRecording("aaaa0000000000000000000000000002");
     expect(c.title).toBe("Introductory Networking Call: Peak Nine & GIZ Namibia");
     expect(c.text).toContain("### Action Items");
     expect(c.text).toContain("- [ ] Niels to share the Peak Nine website URL via LinkedIn by Friday");
     expect(c.text).not.toContain("Marie: hello");
+    expect(c.transcript).toContain("Niels: I will share the Peak Nine website link with you on LinkedIn by Friday.");
   });
-  it("uses the transcript when there is no summary", async () => {
+  it("works from the transcript alone when there is no summary", async () => {
     meeting("aaaa0000000000000000000000000002", "Quick call", [], ["Niels: I'll send the deck to Sankhya tomorrow, she reviews it by Monday so we can finalise it."]);
     const c = await readRecording("aaaa0000000000000000000000000002");
-    expect(c.text).toContain("Transcript:");
-    expect(c.text).toContain("send the deck");
+    expect(c.text).toBe("");
+    expect(c.transcript).toContain("send the deck");
+    expect(hasContent(c)).toBe(true);
   });
 });
 
@@ -209,58 +249,238 @@ describe("picking the recording", () => {
   });
 });
 
+const BOARDS5 = DEFAULT_BOARDS.filter((b) => ["mothership", "jonas", "touchdown", "sankhya", "laura"].includes(b.key));
+const SOURCE = "Niels: I will share the Peak Nine website link with you on LinkedIn by Friday. Laura could make a one-pager on Proof of Change for the project manager.";
+
+describe("checking what the model returned", () => {
+  const opts = { boards: BOARDS5, projects: { mothership: ["P9 - Sales"] }, team: DEFAULT_TEAM, source: SOURCE, today: "2026-11-06", existing: { laura: ["Make a one-pager on Proof of Change"] } };
+  it("keeps an item only when its quote is really in the recording", () => {
+    expect(quoteFound("I will share the Peak Nine website link", SOURCE)).toBe(true);
+    expect(quoteFound("i will SHARE the peak-nine website, link", SOURCE)).toBe(true); // punctuation and case don't count
+    expect(quoteFound("I will share the website link", SOURCE)).toBe(false); // a word missing
+    expect(quoteFound("by Friday", SOURCE)).toBe(false); // too short to prove anything
+    const r = validateGtd(
+      {
+        tasks: [
+          task({ title: "Share the website with Marie", evidence: "I will share the Peak Nine website link with you on LinkedIn", deadline: "2026-11-07", deadline_quote: "by Friday", project: "P9 - Sales" }),
+          task({ title: "Invented task", evidence: "Niels promised to rebuild the whole website in a week" }),
+          task({ board: "team", title: "Not a GTD board", evidence: "I will share the Peak Nine website link" }),
+        ],
+      },
+      opts
+    );
+    expect(r.tasks.map((t) => t.title)).toEqual(["Share the website with Marie"]);
+    expect(r.tasks[0]).toMatchObject({ deadline: "2026-11-07", deadlineQuote: "by Friday", project: "P9 - Sales", duplicateOf: null });
+    expect(r.droppedNoQuote).toBe(1);
+    expect(r.droppedOther).toBe(1);
+  });
+  it("needs a quote for a deadline, a real project, and matches duplicates to open tasks", () => {
+    const r = validateGtd(
+      {
+        tasks: [
+          task({ board: "laura", title: "Make a one-pager on Proof of Change", evidence: "Laura could make a one-pager on Proof of Change", duplicate_of: "make a one-pager on proof of change", deadline: "2026-11-10", deadline_quote: "next Monday" }),
+          task({ board: "laura", title: "Make a one pager on Proof of Change!", evidence: "Laura could make a one-pager on Proof of Change", project: "Invented" }),
+          task({ title: "Share the website", evidence: "I will share the Peak Nine website link", duplicate_of: "something not on the board" }),
+        ],
+      },
+      opts
+    );
+    expect(r.tasks).toHaveLength(2); // the second laura item repeats the first
+    expect(r.tasks[0]).toMatchObject({ duplicateOf: "Make a one-pager on Proof of Change", deadline: null, project: null });
+    expect(r.tasks[1].duplicateOf).toBeNull();
+  });
+  it("treats done and archived rows as closed", () => {
+    expect(isClosed({ properties: { Status: { select: { name: "Done" } } } })).toBe(true);
+    expect(isClosed({ properties: { Tags: { multi_select: [{ name: "Tasks" }, { name: "Done" }] } } })).toBe(true);
+    expect(isClosed({ properties: { Status: { status: { name: "In progress" } } } })).toBe(false);
+  });
+  it("prices a run from the token counts", () => {
+    expect(priceOf("claude-opus-5-5", { input_tokens: 1_000_000, output_tokens: 100_000 })).toBeCloseTo(6);
+    expect(priceOf("unknown-model", { input_tokens: 1 })).toBeNull();
+  });
+});
+
+const EVIDENCE_WEB = "I will share the Peak Nine website link with you on LinkedIn by Friday";
+const EVIDENCE_LAURA = "Laura could make a one-pager on Proof of Change that you can pass on to the project manager";
+const FIRST = { tasks: [task({ title: "Share the website with Marie on LinkedIn", evidence: EVIDENCE_WEB })] };
+const REVIEW = {
+  added: 2,
+  removed: 0,
+  tasks: [
+    task({ title: "Share the website with Marie on LinkedIn", context: "Marie looks for links with GIZ.", evidence: EVIDENCE_WEB, deadline: "2026-10-23", deadline_quote: "by Friday", project: "P9 - Sales", duplicate_of: "" }),
+    task({ board: "laura", title: "Make a one-pager on Proof of Change for GIZ", evidence: EVIDENCE_LAURA, duplicate_of: "Make a one-pager on Proof of Change" }),
+    task({ board: "jonas", title: "Follow up on the made-up budget", evidence: "Jonas will send the budget to Marie tomorrow morning", duplicate_of: "" }),
+  ],
+};
+
+// The first run takes the newest recording without GTD; later runs name it by link, because a
+// recording handled once is remembered as done until a restart.
+let firstRun = true;
+async function runOnce(slack: any, claude: any) {
+  const req = firstRun ? { query: null, pageId: null } : { query: null, pageId: "aaaa0000000000000000000000000002" };
+  firstRun = false;
+  return runGtd(slack, deps(claude), { channel: "D1", ts: "1.1", thread_ts: "1.0", user: "UNIELS", text: "GTD", channel_type: "im" }, req, "1.0");
+}
+const overviewOf = (slack: any) => [...(slack.calls.update || [])].reverse().find((u: any) => u.blocks);
+const actionsOf = () => {
+  const actions: Record<string, any> = {};
+  registerGtdActions({ action: (id: any, fn: any) => (actions[id instanceof RegExp ? "pick" : String(id)] = fn), view: (id: any, fn: any) => (actions["view:" + id] = fn) }, deps({}));
+  return actions;
+};
+const ticks = (blocks: any[], ids: string[]) => {
+  const values: any = {};
+  for (const b of blocks.filter((x: any) => String(x.block_id || "").startsWith("gtd_b_"))) {
+    const el = b.elements[0];
+    values[b.block_id] = { [el.action_id]: { selected_options: el.options.filter((o: any) => ids.includes(o.value)) } };
+  }
+  return values;
+};
+
 describe("GTD run", () => {
-  it("drafts cards for Niels's boards in the DM and ticks the recording", async () => {
+  it("reads everything, runs two passes on a strong model, and posts one overview with checkboxes", async () => {
+    OPEN["c4f4ed2a82bf467eb290fa670606a2e7"] = [titled("Title", "Make a one-pager on Proof of Change"), titled("Title", "Old finished thing", { Status: { select: { name: "Done" } } })];
+    OPEN.mothership = [titled("Task", "Call the accountant")];
     const slack = fakeSlack();
-    const claude = fakeClaude({
-      is_task_request: true,
-      problem: "",
-      tasks: [
-        { board: "mothership", title: "Share the Peak Nine website with Marie on LinkedIn", context: "Marie reviews it for links with GIZ.", deadline: "2026-10-23", deadline_quote: "by Friday", project: "P9 - Sales", responsible: "", urls: [] },
-        { board: "laura", title: "Design a one-pager on Proof of Change for GIZ", context: "Marie will review the website for links with GIZ.", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] },
-        { board: "team", title: "Not a GTD board", context: "", deadline: "", deadline_quote: "", project: "", responsible: "", urls: [] },
-      ],
-    });
-    const deps = { anthropic: claude as any, model: "m", botUserId: "UBOT", canConfirm: (u: string, r: string) => u === r };
-    // In Pidgi's agent DM every conversation is a thread.
-    const r = await runGtd(slack, deps, { channel: "D1", ts: "1.1", thread_ts: "1.0", user: "UNIELS", text: "GTD", channel_type: "im" }, { query: null, pageId: null }, "1.0");
-    expect(slack.calls.postMessage.length).toBeGreaterThan(1);
-    for (const m of slack.calls.postMessage) expect(m.thread_ts, m.text).toBe("1.0");
-
+    const claude = fakeClaude([FIRST, REVIEW]);
+    const r = await runOnce(slack, claude);
     expect(r).toMatchObject({ kind: "handled", private: true });
-    const prompt = claude.seen[0].messages[0].content as string;
-    expect(prompt).toContain("Introductory Networking Call: Peak Nine & GIZ Namibia");
-    expect(prompt).toContain("Niels to share the Peak Nine website URL via LinkedIn by Friday");
-    expect(prompt).toContain("Only what Niels, Jonas, Sankhya or Laura must do");
-    expect(prompt).toContain("Jonas's own actions go on jonas");
-    expect(claude.seen[0].tools[0].input_schema.properties.tasks.items.properties.board.enum).toEqual(["laura", "sankhya", "jonas", "touchdown", "mothership", "unknown"]);
+    for (const m of slack.calls.postMessage) expect(m.thread_ts).toBe("1.0");
 
-    // Header + two cards (the team sync item isn't a GTD board), all in the DM.
-    expect(slack.calls.update[0].text).toContain("2 suggestions");
-    const laura = slack.calls.postMessage.filter((m: any) => m.blocks)[1];
-    expect(JSON.stringify(laura.blocks)).toContain("Design a one-pager on Proof of Change for GIZ");
-    expect(slack.calls.update[0].text).toContain("GIZ Namibia");
-    const card = slack.calls.postMessage.find((m: any) => m.blocks);
-    expect(card.channel).toBe("D1");
-    expect(JSON.stringify(card.blocks)).toContain("Share the Peak Nine website with Marie on LinkedIn");
+    // Two passes, on Opus 5.5 at high effort, structured JSON, the recording cached for the second pass.
+    expect(claude.seen).toHaveLength(2);
+    const [p1, p2] = claude.seen;
+    expect(p1.model).toBe("claude-opus-5-5");
+    expect(p1.output_config.effort).toBe("high");
+    expect(p1.output_config.format.type).toBe("json_schema");
+    expect(p1.betas).toEqual(["server-side-fallback-2026-07-01"]);
+    expect(p1.fallbacks).toBe("default");
+    expect(p1.tool_choice).toBeUndefined();
+    const shared = p1.messages[0].content[0];
+    expect(shared.cache_control).toEqual({ type: "ephemeral" });
+    expect(shared.text).toContain("SUMMARY AND NOTES:");
+    expect(shared.text).toContain("Niels: And Laura could make a one-pager"); // the full transcript
+    expect(p2.messages[0].content[0]).toEqual(shared);
+    const review = p2.messages[0].content[1].text;
+    expect(review).toContain("Share the website with Marie on LinkedIn"); // first-pass candidates
+    expect(review).toContain("  - Make a one-pager on Proof of Change"); // open tasks on Laura's board
+    expect(review).toContain("  - Call the accountant");
+    expect(review).not.toContain("Old finished thing");
+    expect(p2.output_config.format.schema.properties.tasks.items.properties.duplicate_of).toBeDefined();
+
+    // One overview: the invented Jonas item is dropped, the likely duplicate is unticked.
+    const ov = overviewOf(slack);
+    const text = JSON.stringify(ov.blocks);
+    expect(ov.text).toContain("2 suggestions");
+    expect(text).toContain("First pass 1, review added 2 and removed 0");
+    expect(text).toContain("1 dropped because their quote wasn't in the recording");
+    expect(text).toContain("1 may already be on a board");
+    expect(text).toMatch(/≈ \$0\.\d\d/);
+    expect(text).not.toContain("made-up budget");
+    const groups = ov.blocks.filter((b: any) => String(b.block_id || "").startsWith("gtd_b_"));
+    expect(groups.map((b: any) => b.block_id)).toEqual(["gtd_b_laura_0", "gtd_b_mothership_0"]);
+    const laura = groups[0].elements[0];
+    expect(laura.type).toBe("checkboxes");
+    expect(laura.initial_options).toBeUndefined(); // the duplicate starts unticked
+    expect(groups[1].elements[0].initial_options).toHaveLength(1);
+    for (const g of groups) for (const o of g.elements[0].options) expect(o.text.text.length).toBeLessThanOrEqual(75), expect(o.description.text.length).toBeLessThanOrEqual(75);
+    const buttons = ov.blocks.find((b: any) => b.block_id === "gtd_actions").elements;
+    expect(buttons.map((e: any) => e.action_id)).toEqual([G.add, G.edit, G.discard]);
+    expect(buttons[0].text.text).toBe("✅ Add selected (1)");
+
+    // The recording is ticked once the overview is up.
     expect(updates).toEqual([{ page_id: "aaaa0000000000000000000000000002", properties: { GTD: { checkbox: true } } }]);
+  });
 
-    // ✅ writes the row with a link back to the recording.
-    const actions: Record<string, any> = {};
-    registerTaskActions({ action: (id: any, fn: any) => (actions[String(id)] = fn), view: () => {} }, deps);
-    const createBtn = card.blocks.find((b: any) => b.block_id === "p9task_buttons").elements[0];
-    await actions["p9task_create"]({
-      ack: async () => {},
-      body: { user: { id: "UNIELS" }, channel: { id: "D1" }, message: { ts: "9.2", blocks: card.blocks }, state: { values: {} } },
-      action: createBtn,
-      client: slack,
-    });
-    const page = created[0];
-    expect(page.parent).toEqual({ type: "data_source_id", data_source_id: "2d3c675ff9588031805c000b7f320c36" });
-    const body = JSON.stringify(page.children);
-    expect(body).toContain("Captured from a meeting recording by Pidgi");
+  it("Add selected writes the ticked tasks, with the quote and a link to the recording", async () => {
+    const slack = fakeSlack();
+    await runOnce(slack, fakeClaude([FIRST, REVIEW]));
+    const ov = overviewOf(slack);
+    const add = ov.blocks.find((b: any) => b.block_id === "gtd_actions").elements[0];
+    const actions = actionsOf();
+    // Niels ticks both, including the possible duplicate.
+    const state = ticks(ov.blocks, ["t1", "t2"]);
+    expect(selectedFromState(state).sort()).toEqual(["t1", "t2"]);
+    await actions[G.add]({ ack: async () => {}, action: add, client: slack, body: { user: { id: "UNIELS" }, channel: { id: "D1" }, message: { ts: "9.2", blocks: ov.blocks }, state: { values: state } } });
+
+    expect(created).toHaveLength(2);
+    const ms = created.find((c) => c.parent.data_source_id === MS_DS);
+    expect(ms.properties.Task.title[0].text.content).toBe("Share the website with Marie on LinkedIn");
+    expect(ms.properties["Due Date"]).toEqual({ date: { start: "2026-10-23" } });
+    expect(ms.properties.Project).toEqual({ multi_select: [{ name: "P9 - Sales" }] });
+    const body = JSON.stringify(ms.children);
+    expect(body).toContain(`Said in the meeting: “${EVIDENCE_WEB}”`);
     expect(body).toContain("Open the recording");
-    expect(body).toContain("Deadline as said in the meeting");
+    expect(created.find((c) => c.parent.database_id === "c4f4ed2a82bf467eb290fa670606a2e7")).toBeDefined();
+
+    const after = overviewOf(slack);
+    expect(after.ts).toBe("9.2");
+    const t = JSON.stringify(after.blocks);
+    expect(t).toContain("all done");
+    expect(t).toContain("✅ <https://www.notion.so/new|Share the website with Marie on LinkedIn> → Mothership");
+    expect(after.blocks.find((b: any) => b.block_id === "gtd_actions")).toBeUndefined();
+  });
+
+  it("only who ran GTD can add, and unticked suggestions stay for later", async () => {
+    const slack = fakeSlack();
+    await runOnce(slack, fakeClaude([FIRST, REVIEW]));
+    const ov = overviewOf(slack);
+    const add = ov.blocks.find((b: any) => b.block_id === "gtd_actions").elements[0];
+    const actions = actionsOf();
+    await actions[G.add]({ ack: async () => {}, action: add, client: slack, body: { user: { id: "USOMEONE" }, channel: { id: "D1" }, message: { ts: "9.2", blocks: ov.blocks }, state: { values: ticks(ov.blocks, ["t1"]) } } });
+    expect(created).toHaveLength(0);
+    expect(slack.calls.ephemeral.pop().text).toContain("Only <@UNIELS>");
+
+    await actions[G.add]({ ack: async () => {}, action: add, client: slack, body: { user: { id: "UNIELS" }, channel: { id: "D1" }, message: { ts: "9.2", blocks: ov.blocks }, state: { values: ticks(ov.blocks, ["t1"]) } } });
+    expect(created).toHaveLength(1);
+    const after = overviewOf(slack);
+    expect(after.text).toContain("1 suggestion left");
+    expect(JSON.stringify(after.blocks)).toContain("Make a one-pager on Proof of Change for GIZ");
+  });
+
+  it("Edit a task: change the title, board and deadline, and the overview follows", async () => {
+    const slack: any = fakeSlack();
+    slack.views = { open: async (a: any) => ((slack.calls.views ||= []).push(a), { ok: true }) };
+    await runOnce(slack, fakeClaude([FIRST, REVIEW]));
+    const ov = overviewOf(slack);
+    const edit = ov.blocks.find((b: any) => b.block_id === "gtd_actions").elements[1];
+    const opt = edit.options.find((o: any) => o.value.endsWith("|t2"));
+    const actions = actionsOf();
+    await actions[G.edit]({ ack: async () => {}, action: { selected_option: opt }, client: slack, body: { trigger_id: "tr", user: { id: "UNIELS" }, channel: { id: "D1" }, message: { ts: "9.2", blocks: ov.blocks }, state: { values: ticks(ov.blocks, ["t1"]) } } });
+    const modal = slack.calls.views[0].view;
+    expect(modal.callback_id).toBe(G.editSubmit);
+    expect(JSON.stringify(modal.blocks)).toContain(EVIDENCE_LAURA);
+
+    await actions["view:" + G.editSubmit]({
+      ack: async () => {},
+      client: slack,
+      body: { user: { id: "UNIELS" } },
+      view: {
+        private_metadata: modal.private_metadata,
+        state: { values: { title: { v: { value: "Ask Laura for a GIZ one-pager" } }, context: { v: { value: "Short, visual." } }, board: { v: { selected_option: { value: "mothership" } } }, deadline: { v: { selected_date: "2026-11-14" } } } },
+      },
+    });
+    const after = overviewOf(slack);
+    const groups = after.blocks.filter((b: any) => String(b.block_id || "").startsWith("gtd_b_"));
+    expect(groups.map((b: any) => b.block_id)).toEqual(["gtd_b_mothership_0"]);
+    expect(JSON.stringify(groups)).toContain("Ask Laura for a GIZ one-pager");
+    expect(JSON.stringify(groups)).toContain("📅 Sat 14 Nov 2026");
+  });
+
+  it("Discard the rest leaves what was added and says nothing more was added", async () => {
+    const slack = fakeSlack();
+    await runOnce(slack, fakeClaude([FIRST, REVIEW]));
+    const ov = overviewOf(slack);
+    const discard = ov.blocks.find((b: any) => b.block_id === "gtd_actions").elements[2];
+    await actionsOf()[G.discard]({ ack: async () => {}, action: discard, client: slack, body: { user: { id: "UNIELS" }, channel: { id: "D1" }, message: { ts: "9.2" } } });
+    expect(JSON.stringify(overviewOf(slack).blocks)).toContain("discarded, nothing more was added");
+    expect(created).toHaveLength(0);
+  });
+
+  it("doesn't tick the recording when a pass fails", async () => {
+    const slack = fakeSlack();
+    await runOnce(slack, fakeClaude([FIRST, new Error("overloaded")]));
+    expect(slack.calls.update.pop().text).toContain("I couldn't finish GTD");
+    expect(updates).toHaveLength(0);
   });
 
   it("adds the GTD column when it is missing", async () => {
@@ -273,24 +493,24 @@ describe("GTD run", () => {
       }
       return orig(args);
     };
-    const slack = fakeSlack();
-    const claude = fakeClaude({ is_task_request: true, problem: "", tasks: [] });
-    await runGtd(slack, { anthropic: claude as any, model: "m", canConfirm: () => true }, { channel: "D1", ts: "1.1", user: "UNIELS", text: "GTD" }, { query: null, pageId: "aaaa0000000000000000000000000002" });
+    await runOnce(fakeSlack(), fakeClaude([{ tasks: [] }, { tasks: [], added: 0, removed: 0 }]));
     fakeNotion.pages.update = orig;
     expect(schemaPatched).toBe(true);
     expect(updates).toHaveLength(1);
-    expect(slack.calls.update[0].text).toBe(
-      "Nothing concrete for your boards in *<https://www.notion.so/aaaa0000000000000000000000000002|Introductory Networking Call: Peak Nine & GIZ Namibia>*."
-    );
   });
 
-  it("doesn't tick the recording when the run fails", async () => {
+  it("GTD today runs every recording of today without GTD, one overview each", async () => {
+    const now = new Date().toISOString();
+    ROWS.unshift(row("bbbb0000000000000000000000000002", "Meeting ‣", now), row("bbbb0000000000000000000000000001", "Meeting ‣", now));
+    meeting("bbbb0000000000000000000000000001", "Morning sync", [], ["Niels: I will share the Peak Nine website link with you on LinkedIn by Friday."]);
+    meeting("bbbb0000000000000000000000000002", "Afternoon call", ["### Action Items", "- [ ] Jonas to send the budget"], []);
     const slack = fakeSlack();
-    const broken = { seen: [], messages: { create: async () => Promise.reject(new Error("overloaded")) } };
-    const r = await runGtd(slack, { anthropic: broken as any, model: "m", canConfirm: () => true }, { channel: "D1", ts: "1.1", user: "UNIELS", text: "GTD" }, { query: null, pageId: "aaaa0000000000000000000000000002" });
-    expect(r.kind).toBe("handled");
-    expect(slack.calls.update[0].text).toContain("couldn't distil");
-    expect(updates).toHaveLength(0);
+    const claude = fakeClaude([FIRST, { ...REVIEW }, { tasks: [] }, { tasks: [], added: 0, removed: 0 }]);
+    await runGtd(slack, deps(claude), { channel: "D1", ts: "1.1", user: "UNIELS", text: "GTD today" }, { query: null, pageId: null, today: true });
+    expect(slack.calls.postMessage[0].text).toContain("GTD on 2 recordings from today");
+    expect(claude.seen).toHaveLength(4);
+    expect(claude.seen[0].messages[0].content[0].text).toContain('Recording: "Morning sync"'); // oldest first
+    expect(updates.map((u) => u.page_id)).toEqual(["bbbb0000000000000000000000000001", "bbbb0000000000000000000000000002"]);
   });
 
   it("keeps Recordings hidden from everyone but Niels", () => {
