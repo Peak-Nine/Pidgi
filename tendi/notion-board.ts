@@ -94,6 +94,11 @@ function client(): Client {
   return _client;
 }
 
+/** The same Notion client (Pidgi's integration, NOTION_TOKEN), for other Tendi jobs such as Scale & Sustain Stories. */
+export function notionClient(): Client {
+  return client();
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const rt = (s: string) => ({ rich_text: [{ type: "text", text: { content: String(s).slice(0, 1900) } }] });
