@@ -32,6 +32,7 @@ const orgFromTitle = (title: string) => title.replace(/^.*?:\s*/, "");
 interface SssState {
   awaitingLogo: Record<string, { org: string; issueNo: number; threadTs: string }>; // designId -> post
   introPosted?: Record<string, string>; // channel -> ISO time
+  introTextTs?: Record<string, string>; // channel -> ts of the intro message, so a retry does not repeat it
   week?: { monday: string; attempts: number; done: boolean };
 }
 function stateFile(): string {
@@ -329,7 +330,12 @@ export function createScaleSustain(deps: SssDeps) {
       page = { pageId: created.id, url: created.url };
     }
 
-    await slack.chat.postMessage({ channel, text: INTRO_TEXT, unfurl_links: false, unfurl_media: false });
+    if (!loadSssState().introTextTs?.[channel]) {
+      const m = await slack.chat.postMessage({ channel, text: INTRO_TEXT, unfurl_links: false, unfurl_media: false });
+      const s1 = loadSssState();
+      s1.introTextTs = { ...(s1.introTextTs || {}), [channel]: String(m?.ts || "posted") };
+      saveSssState(s1);
+    }
     const posted = await postWithFiles(slack, {
       channel,
       text: postText({
@@ -356,7 +362,19 @@ export function createScaleSustain(deps: SssDeps) {
     return { posted: true as const, ts: posted.ts, channel, notionUrl: page.url };
   }
 
-  return { runWeekly, handleRepeat, handleLogoReply, isRepeatSignal, postIntro, buildAndPost, isBusy: () => busy, channel };
+  /**
+   * Has issue #01 not been posted in Slack yet? True only when its Content Calendar entry
+   * exists and carries no Slack message. Posting writes the message into the entry, so this
+   * turns false for good: the guard against a second intro, also across redeploys without a disk.
+   */
+  async function introPending(): Promise<boolean> {
+    if (loadSssState().introPosted?.[channel]) return false;
+    const entries = await listSeriesEntries(notion);
+    const first = entries.find((e) => e.caseId === firstPost.caseId);
+    return !!first && !first.slackTs;
+  }
+
+  return { runWeekly, handleRepeat, handleLogoReply, isRepeatSignal, postIntro, introPending, buildAndPost, isBusy: () => busy, channel };
 }
 
 export type ScaleSustain = ReturnType<typeof createScaleSustain>;

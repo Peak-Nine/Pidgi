@@ -80,6 +80,29 @@ export function startSssService(deps: SssServiceDeps) {
     log(deps.sss ? "schedule paused (SSS_ENABLED=0)" : `off: ${deps.offReason || "not configured"}`);
   }
 
+  // ── the intro, once, on its own ─────────────────────────────────────────────
+  // SSS_AUTO_INTRO=1 (the default) posts the introduction and issue #01 shortly after start,
+  // but only while #01's Content Calendar entry has no Slack message yet (see introPending).
+  // No admin key needed: a deploy is enough. SSS_AUTO_INTRO=0 switches it off.
+  if (deps.sss && process.env.SSS_AUTO_INTRO !== "0") {
+    const sss = deps.sss;
+    setTimeout(() => {
+      void (async () => {
+        try {
+          if (!(await sss.introPending())) {
+            log("intro: already posted (or #01 not in the Content Calendar); nothing to do");
+            return;
+          }
+          log(`intro: posting the introduction and issue #01 in ${sss.channel}`);
+          await run("auto intro", () => sss.postIntro());
+        } catch (e: any) {
+          lastError = `${new Date().toISOString()} auto intro check: ${String(e?.message || e).slice(0, 400)}`;
+          log(lastError);
+        }
+      })();
+    }, Number(process.env.SSS_AUTO_INTRO_DELAY_MS) || 75_000).unref?.();
+  }
+
   // ── Slack ───────────────────────────────────────────────────────────────────
   async function userName(client: any, id: string): Promise<string | undefined> {
     try {
