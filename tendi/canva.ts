@@ -229,7 +229,8 @@ export function isCanvaWriteTool(name: string): boolean {
 }
 
 /** Peak Nine master templates in Canva. Tendi copies them; it never opens one for editing. */
-export const MASTER_TEMPLATE_IDS = ["DAHRT8eVhhA", "DAHKhE6U2vk", "DAHWFiZkv6w", "DAHWICf3ANs"];
+// DAHZT4MaY2s: the Scale & Sustain Stories carousel master (tendi/sss).
+export const MASTER_TEMPLATE_IDS = ["DAHRT8eVhhA", "DAHKhE6U2vk", "DAHWFiZkv6w", "DAHWICf3ANs", "DAHZT4MaY2s"];
 
 /**
  * Refuse any Canva call that would edit a master template: opening an editing

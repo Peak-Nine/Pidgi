@@ -38,6 +38,7 @@ tendi/
   slack-manifest.json  app manifest for the Tendi Slack app
   .env.example      every environment variable, explained
   scout/            Tendi Scout, the daily tender watcher (see section 7)
+  sss/              Scale & Sustain Stories, the weekly LinkedIn case post (see section 8)
     sources/        one reader per source: TED, UNDP, ReliefWeb, Enabel
     http.ts         the polite HTTP layer every request goes through
     filter.ts       the cheap keyword filter that runs before any model call
@@ -206,6 +207,39 @@ A laptop run stores its memory in your temp folder unless `TENDI_DATA_DIR` says 
 ### Costs, roughly
 
 I'm estimating here, go verify against the Anthropic console after the first week. A first run scores up to 60 tenders; a normal day 20 to 40. With `claude-sonnet-4-6` at the prices in `tendi/usage.ts` (3 USD per million input tokens, 15 per million output, not checked live) that is in the order of 0.10 to 0.30 USD per day. Scout's calls are logged with `thread: "scout"` in the same usage log, so `/usage?key=...` shows them.
+
+## 8. Scale & Sustain Stories: the weekly LinkedIn case post
+
+Every Monday from 08:30 Brussels time, Tendi builds one carousel from the Beyond the Grant Case Library (library.peaknine.studio) and posts it in #peak-nine-marketing. The code is in `tendi/sss/`; the original brief and the Scale & Sustain skill are in `tendi/sss/reference/`.
+
+What one run does:
+
+1. Picks the next case: lasted, high evidence, four or more dated timeline steps, never in the Content Calendar before (also not when it was replaced with 🔁), and different from recent weeks in who pays, theme and, more lightly, region (`sss/pick-case.ts`).
+2. Asks Claude for the copy and the caption (`sss/prompts/copy-system.md`, with the approved Village Enterprise copy as the example) and checks it (`sss/validate-copy.ts`): character limits, no long dashes, exactly four timeline steps and four takeaways, no calendar years on the timeline page, library link and #BeyondTheGrant in the caption. Three tries, then it stops and says so in the channel.
+3. Looks for the logo on the organisation's own website only (`sss/logo-finder.ts`, plain requests, no headless browser) and makes black and white versions.
+4. Copies the master Canva design `DAHZT4MaY2s`, fills every slot, swaps the logos on pages 1 to 8, saves, exports pages 1 to 10 as the LinkedIn PDF and page 1 as the cover (`sss/canva-build.ts`). The copy lands in the shared Canva folder like every other design Tendi makes. The master is on Tendi's master-template list, so nothing can edit it; the page 2 photo is never touched.
+5. Logs it in Marketing › Content Calendar with status "Feedback needed" (`sss/notion-log.ts`). The Manual notes field holds machine-readable notes (case, design, Slack message); leave it as it is, Tendi reads it to find posts later.
+6. Posts it with the Canva link, the Content Calendar link, the cover, the PDF and the caption.
+
+In the channel:
+
+- 🔁 as a reaction on a post, or a thread reply containing 🔁: from Niels or Jonas (`TENDI_WRITE_ALLOWLIST`, or `SSS_ALLOWED_SLACK_USER_IDS`), the entry moves to "Review if still relevant" and a new post with the next case appears in the same thread, also shown in the channel. At most three builds per week. Anyone else gets a short polite no.
+- No logo found (some sites block automated requests; the brief names Village Enterprise and Educate Girls): the logo spots stay empty, never another organisation's logo, and Tendi asks in the thread. Post a PNG, JPG or SVG file (or a link to one) in that thread and Tendi adds it and posts the new PDF.
+
+Still with the team: the page 2 photo (only with the organisation's permission) and posting on LinkedIn with the tags Tendi lists.
+
+### Switching it on
+
+1. Slack app (api.slack.com/apps → Tendi → OAuth & Permissions): make sure the bot has `chat:write`, `files:write`, `files:read`, `reactions:read`, `groups:history` and `groups:read` (the last one is new in the manifest), reinstall, and check the bot token did not change. Events `reaction_added` and `message.groups` are already subscribed. Tendi is already a member of #peak-nine-marketing.
+2. Notion: open Marketing › Content Calendar → ••• → Connections → add the same integration as the Tender Board (the one whose secret is `NOTION_TOKEN`). Without it every Notion call answers "object not found".
+3. Canva: the job needs the newer Canva tools (`copy-design`, `read-design`, `edit-design`, `create-upload-url`, `export-design`). If the start log says "Canva connection lacks ...", reconnect Canva (`npm run tendi:canva-login`, section 3) and check `canva_status`.
+4. Test first: set `SSS_SLACK_CHANNEL_ID` on Render to a private test channel (invite Tendi there), redeploy, then `GET /sss/run?key=<TENDI_ADMIN_KEY>` builds one post now. `GET /sss/status?key=...` shows the result or the error.
+5. Then empty `SSS_SLACK_CHANNEL_ID` (back to #peak-nine-marketing), delete the test entries in the Content Calendar, redeploy.
+6. Once: `GET /sss/intro?key=...&confirm=1` (or `npm run tendi:sss-intro` from a laptop with `PUBLIC_BASE_URL` and `TENDI_ADMIN_KEY`) posts the introduction and issue #01, Village Enterprise (design `DAHaON1C8Z4`, already built and approved), and writes the Slack message into its Content Calendar entry, so next Monday becomes #02 and Village Enterprise is never picked again. It runs once per channel; `&force=1` repeats it. #01 still shows the DHIS2 screenshot on page 2 from the master; the post says so.
+
+Checks: `npm test` (offline, mocked Slack, Notion, Canva and Claude) and `npm run tendi:sss-smoke` (live library and a real logo lookup, everything else mocked).
+
+Good to know: the brief counted 18 library cases that fit the template automatically (about four months of Mondays; I did not recount, the smoke test prints the current number). When the picker finds none, the Monday run says so in the channel.
 
 ## Known limits
 
