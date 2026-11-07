@@ -275,6 +275,19 @@ describe("Scale & Sustain Stories: the job with mocks", () => {
     expect((await sss.postIntro()).skipped).toBe(true);
   });
 
+  it("auto intro guard: pending only while #01 has no Slack message, and never twice", async () => {
+    const m = mocks();
+    const sss = createScaleSustain({ ...m, model: "x", slackToken: "x", channel: "CTEST", library: lib, log: { info() {}, warn() {}, error() {} } });
+    expect(await sss.introPending()).toBe(false); // no #01 entry: do nothing
+    m.rows.push(row({ title: "Scale & Sustain Stories #01: Village Enterprise", notes: "case:WEB-2026-001; design:DAHaON1C8Z4; slack:; thread:; routes:O; theme:Livelihoods and jobs; built with Claude on 7 Nov 2026, Tendi takes over from here", created: "2026-11-07T10:23:47Z" }));
+    expect(await sss.introPending()).toBe(true);
+    await sss.postIntro();
+    expect(await sss.introPending()).toBe(false);
+    m.rows[0] = row({ title: "Scale & Sustain Stories #01: Village Enterprise", notes: encodeNotes({ caseId: "WEB-2026-001", slackTs: "101.0" }), created: "2026-11-07T10:23:47Z" });
+    saveSssState({ awaitingLogo: {} }); // even with the disk wiped, Notion says it is done
+    expect(await sss.introPending()).toBe(false);
+  });
+
   it("house style: no long dashes in what Tendi posts", () => {
     const t = postText({ issueNo: 1, org: "X", why: "w", canvaUrl: "u", notionUrl: "n", caseLink: "l", tags: ["X"], hasLogo: false, notesForTeam: "n", exportNote: "e" });
     expect(/[—–]/.test(INTRO_TEXT + t)).toBe(false);
