@@ -18,7 +18,7 @@ import { textOps, logoOps, assetIdFrom, exportUrl, type LogoSlot } from "../tend
 import { encodeNotes, decodeNotes, weekStartBrussels, isoDate, buildsThisWeek, brusselsDay } from "../tendi/sss/notion-log";
 import { createScaleSustain, loadSssState, saveSssState } from "../tendi/sss/job";
 import { weeklyDue } from "../tendi/sss/service";
-import { buildPost, editingGeneration, toV1Op, collectElementIds } from "../tendi/sss/canva-build";
+import { buildPost, editingGeneration, toV1Op, collectElementIds, styleSafeReplace } from "../tendi/sss/canva-build";
 import { INTRO_TEXT, postText } from "../tendi/sss/slack-messages";
 import { sssAllowedUsers } from "../tendi/sss/config";
 import { masterTemplateGuard } from "../tendi/canva";
@@ -243,6 +243,15 @@ describe("Scale & Sustain Stories: Canva's older editing tools (Tendi's connecti
     expect(toV1Op({ type: "delete_element", locator_id: "PBa-LBy" }, resolve, () => "PBa", 1)).toEqual({ type: "delete_element", element_id: "LBy" });
   });
 
+  it("style-safe replace: find_and_replace on the current text, extra runs emptied", () => {
+    expect(styleSafeReplace({ type: "replace_text", element_id: "E", text: "new" }, ["old\n"])).toEqual([{ type: "find_and_replace_text", element_id: "E", find_text: "old", replace_text: "new" }]);
+    expect(styleSafeReplace({ type: "replace_text", element_id: "E", text: "new" }, ["a", " ", "b"])).toEqual([
+      { type: "find_and_replace_text", element_id: "E", find_text: "a", replace_text: "new" },
+      { type: "find_and_replace_text", element_id: "E", find_text: "b", replace_text: "" },
+    ]);
+    expect(styleSafeReplace({ type: "replace_text", element_id: "E", text: "new" }, undefined)).toEqual([{ type: "replace_text", element_id: "E", text: "new" }]);
+  });
+
   it("builds with the older tools; skips what the schema does not offer; no logo upload without the tools", async () => {
     const { canva, calls } = v1Canva({ schemaOps: ["replace_text", "find_and_replace_text", "delete_element", "update_title"] });
     const v = validateCopy(ve.deck, veCase);
@@ -252,7 +261,8 @@ describe("Scale & Sustain Stories: Canva's older editing tools (Tendi's connecti
     expect(built.logoPlaced).toBe(false);
     const ops = calls.filter((c) => c.name === "perform-editing-operations").flatMap((c) => c.args.operations);
     expect(ops.every((o: any) => !("locator_id" in o))).toBe(true);
-    expect(ops.find((o: any) => o.type === "replace_text")?.element_id).toBe("PBpWZD1bPbqmRHnr-LB0nxnMtBmyk436g");
+    // the cover headline had text in the session, so it is replaced with find_and_replace (keeps the 96px style)
+    expect(ops.find((o: any) => o.element_id === "PBpWZD1bPbqmRHnr-LB0nxnMtBmyk436g")).toMatchObject({ type: "find_and_replace_text", find_text: "x" });
     expect(ops.some((o: any) => o.type === "insert_fill" || o.type === "format_text" || o.type === "position_element")).toBe(false);
     expect(ops.filter((o: any) => o.type === "delete_element")).toHaveLength(8); // old logos always removed
     expect(calls.some((c) => c.name === "commit-editing-transaction")).toBe(true);
