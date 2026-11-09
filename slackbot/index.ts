@@ -239,8 +239,10 @@ is accepted, or asks to "make a Teamleader project" from an offer, often with th
 This creates the project itself. The "Setting up a NEW project" routine below is a different, later
 step (Slack channel, Notion, meetings) for a project that already exists in Teamleader.
 1. Find the deal: use the id if given, otherwise teamleader_list_deals and match the client and offer
-   title. Then the quotation: teamleader_list_quotations for that deal (or teamleader_get_deal). If
-   there is more than one candidate deal or quotation, list them and ask which one. Never guess.
+   title. Then the quotation: look for it in teamleader_get_deal. teamleader_list_quotations can't
+   filter by deal (only by quotation id), so don't use it to search. If the deal shows no quotation,
+   ask for the quotation's Teamleader link or id. If there is more than one candidate deal or
+   quotation, list them and ask which one. Never guess.
 2. Read teamleader_get_quotation (grouped lines and totals).
 3. Gate structure: from the attached offer when there is one, otherwise from the quotation's grouped
    lines. One group per gate or phase, in order, each with what the client pays for it (EUR excl. VAT)

@@ -201,4 +201,14 @@ describe("executePlan", () => {
     const again = await buildPlan(input, ctx, tl);
     expect(again.plan!.warnings.join(" ")).toMatch(/already created for this deal/);
   });
+
+  it("never cuts a long gate silently on the card", async () => {
+    const { tl } = fakeTl();
+    const many = { ...input, groups: [{ ...input.groups[0], tasks: Array.from({ length: 60 }, (_, i) => ({ title: `Deliverable number ${i + 1} with a fairly long descriptive name for the client`, hours: 8 })) }] };
+    const { plan } = await buildPlan(many, { requester: "U1", channel: "C1" }, tl);
+    const sections = planBlocks(plan!).filter((b: any) => b.type === "section").map((b: any) => b.text.text);
+    expect(sections.every((t: string) => t.length <= 3000)).toBe(true);
+    expect(sections.join("\n")).toMatch(/…and \d+ more task\(s\), all of them will be created/);
+    expect(plan!.groups[0].tasks).toHaveLength(60);
+  });
 });

@@ -427,8 +427,19 @@ function groupLine(g: LaunchGroup): string {
   if (g.placeholder) return `*${g.title}*${dates}\nPlaceholder: €0 fixed price, €0 internal budget`;
   const hrs = groupHours(g);
   const head = `*${g.title}*${dates}\nFixed price ${fmtEur(g.revenue)} · internal budget ${fmtEur(internalBudget(g.revenue))} (60%) · ${g.tasks.length} task(s), ${hrs}h`;
-  const tasks = g.tasks.map((t) => `• ${t.title} (${t.hours === null ? "no hours in offer" : `${t.hours}h`})`).join("\n");
-  return tasks ? `${head}\n${tasks}` : head;
+  // Slack cuts a section at 3000 characters; list what fits and count the rest, never drop silently.
+  const rows = g.tasks.map((t) => `• ${t.title} (${t.hours === null ? "no hours in offer" : `${t.hours}h`})`);
+  let out = head;
+  for (let i = 0; i < rows.length; i++) {
+    const more = rows.length - i - 1;
+    const tail = more ? `\n…and ${more} more task(s)` : "";
+    if ((out + "\n" + rows[i] + tail).length > 2900) {
+      out += `\n…and ${rows.length - i} more task(s), all of them will be created`;
+      break;
+    }
+    out += "\n" + rows[i];
+  }
+  return out;
 }
 
 const NIELS_ID = "1dc0408f-6a00-0039-a953-c67fcb7767f8";
