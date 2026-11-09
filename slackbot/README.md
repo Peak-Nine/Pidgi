@@ -14,7 +14,7 @@ Brain: Claude on the Anthropic API, running a tool-use loop over the Teamleader 
 
 1. https://api.slack.com/apps → open your app.
 2. **OAuth & Permissions** → **Bot Token Scopes** add: `app_mentions:read`, `chat:write`,
-   `im:history`, `im:read`, `im:write`. Then **Install to Workspace** and copy the
+   `im:history`, `im:read`, `im:write`, `files:read` (to read attached PDFs and Word files). Then **Install to Workspace** and copy the
    **Bot User OAuth Token** (`xoxb-...`) → `SLACK_BOT_TOKEN`.
 3. **Basic Information → App Credentials → Signing Secret**. Regenerate it (it was exposed in
    a screenshot), then copy the fresh value → `SLACK_SIGNING_SECRET`.
@@ -75,6 +75,53 @@ npm run build && npm run slackbot         # starts on PORT (default 3000)
   rate, so the bot won't invent one.
 - Write actions are gated by `SLACK_WRITE_ALLOWLIST`. Strongly recommended to set it.
 - Don't paste tokens/secrets into chats or screenshots. Store them only as host env vars.
+
+## Attachments
+
+Pidgi reads files posted with a message: PDF, Word (.docx) and plain text. It needs the `files:read` bot scope.
+- A file on the message itself is always read. A DM with only a file works too: Pidgi says what it is and asks what to do.
+- When the message has no file but points at one ("the attached offer", "deze offerte"), Pidgi reads the
+  latest file posted earlier in the same thread.
+- At most 3 files per message, up to 60,000 characters each (`PIDGI_ATTACHMENT_CHARS`). Longer files are
+  cut, and Pidgi is told so.
+- Scanned PDFs without a text layer, images, spreadsheets and PowerPoint are not read. Pidgi says so
+  instead of guessing.
+
+The reading code is shared with Tendi (`tendi/files.ts`).
+
+## Deal won → Teamleader project
+
+Same flow as the Cowork `deal-won` skill, from Slack:
+
+> @Pidgi make a Teamleader project based on the attached offer
+> @Pidgi Recma accepted, launch the project, start 1 December
+
+1. Pidgi finds the deal and the quotation in Teamleader and asks when more than one fits.
+2. It reads the gate structure from the attached offer, or from the quotation's lines when there is no file:
+   one group per gate, what the client pays per gate, the deliverables and their hours. It copies the
+   numbers as written and asks when hours are given in days, when the start date is missing, or when the
+   offer and the quotation disagree.
+3. It posts a card in the thread. Code, not the model, works out each gate's internal budget (60% of its
+   revenue, rounded to the euro), checks that the gates add up to the quotation total, and warns when they
+   don't, when a deliverable has no hours, or when a project for that deal was already made from an earlier card.
+4. **✅ Mark won + create project** (with a confirm step, since winning a deal can't be undone):
+   - accepts the quotation and marks the deal won (skipped when Teamleader says that's already done)
+   - creates the project for the deal's customer
+   - links the deal and the quotation
+   - assigns Niels (change with `PIDGI_PROJECT_OWNER_ID`)
+   - creates one group per gate (fixed price = gate revenue, internal budget = 60%) and the deliverable
+     tasks inside them (`parent_fixed_price`, hours as estimate)
+   - a gate whose scope is still open becomes a €0 / €0 placeholder with one placeholder task
+5. The card turns into the result with a link to the project. If a step fails, the run stops, the card
+   lists what was done, and **Retry the rest** continues from that step without making a second project.
+
+Who can do what:
+- Only people on `SLACK_WRITE_ALLOWLIST` can ask for a card or click it.
+- The model can't call `teamleader_win_deal` or `teamleader_accept_quotation` at all. Those two only run
+  from the card's button. To mark a deal won without a project, do it in Teamleader.
+
+Cards are saved in Pidgi's data folder (`launches/`). Without a persistent disk, a redeploy forgets open
+cards and their button answers that the card has expired.
 
 ## Task capture: Slack thread → item on a Notion board
 
