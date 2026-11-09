@@ -1,0 +1,73 @@
+{
+  "_note": "Issue #01, built and approved in Canva on 7 Nov 2026. Posted by Tendi in its intro message.",
+  "caseId": "WEB-2026-001",
+  "org": "Village Enterprise",
+  "designId": "DAHaON1C8Z4",
+  "canvaUrl": "https://www.canva.com/d/nun_c0h_e5I-dtr",
+  "notesForTeam": "Page 2 still shows the DHIS2 screenshot from the master: swap in a Village Enterprise photo once they’ve given permission.",
+  "deck": {
+    "cover": {
+      "headline": "How Africa’s first poverty impact bond unlocked $4.28 million.",
+      "subheadline": "Village Enterprise was paid only when families in Kenya and Uganda were measurably better off."
+    },
+    "who": {
+      "statement": "Village Enterprise runs a one-year poverty graduation programme in Kenya and Uganda.",
+      "paragraph": "Between late 2017 and 2020 it delivered the programme in 241 villages in western Kenya and eastern Uganda, with another 241 villages held back for comparison."
+    },
+    "how": {
+      "statement": "Outcome payers paid only for results an independent trial could measure.",
+      "paragraph": "Payment was tied to gains in household consumption and net assets, with targets set from an earlier trial of the same programme. Global Development Incubator acted as trustee."
+    },
+    "timeline": [
+      {
+        "step_index": 0,
+        "header": "The bond launches",
+        "text": "Launches as part of the FCDO development impact bond pilot, with outcome payers paying through a trustee."
+      },
+      {
+        "step_index": 1,
+        "header": "Rolled out in cohorts",
+        "text": "The programme reaches households in 241 villages, while 241 control villages are held back for comparison."
+      },
+      {
+        "step_index": 2,
+        "header": "Results measured",
+        "text": "An endline survey of 9,888 households finds positive, statistically significant gains in consumption and net assets."
+      },
+      {
+        "step_index": 3,
+        "header": "Full payment earned",
+        "text": "The final report is published, and the outcome payment maxes out at US$4,280,618."
+      }
+    ],
+    "takeaways": [
+      {
+        "lesson": "Agree up front what success means, and how it will be measured.",
+        "support": "Payment was tied to pre-agreed metrics, set from an earlier trial of the same programme."
+      },
+      {
+        "lesson": "An independent evaluation can turn results into revenue.",
+        "support": "IDinsight’s randomised evaluation of 9,888 households confirmed the gains, and the full payment was earned."
+      },
+      {
+        "lesson": "Build in a comparison from day one.",
+        "support": "241 control villages were held back next to the 241 villages that received the programme."
+      },
+      {
+        "lesson": "An impact bond pays for one round. Plan who pays next.",
+        "support": "The sources stop at the bond itself; what happened to Village Enterprise’s wider funding afterwards isn’t reported."
+      }
+    ],
+    "caption": "What if proving your impact unlocked $4.28 million?\nFor Village Enterprise, it did. Today we dive into how they did it 👇\n\nVillage Enterprise ran Africa’s first development impact bond for poverty. Their programme reached 241 villages in Kenya and Uganda. Another 241 villages were held back to compare. Funders paid only if families were measurably better off.\n\nHere is what actually worked:\n• Agree on success first: payment was tied to targets from an earlier trial.\n• Build in a comparison: 241 villages without the programme showed what really changed.\n• Let an outsider check: IDinsight tested 9,888 households and confirmed the gains.\n\nA bond can pay for one round, but the next payer still has to be found.\n\nWho should pick up the bill once the bond ends?",
+    "hashtags": [
+      "#ImpactBonds",
+      "#PovertyAlleviation",
+      "#ResultsBasedFinancing"
+    ],
+    "tags": [
+      "Village Enterprise",
+      "IDinsight"
+    ],
+    "notes_for_team": "The sources cover the bond itself, not Village Enterprise’s funding afterwards; takeaway 04 says so."
+  }
+}

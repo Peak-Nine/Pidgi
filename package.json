@@ -24,7 +24,9 @@
     "prepare": "npm run build",
     "check-coverage": "npx tsx tools/check-coverage.ts",
     "test": "vitest run",
-    "tendi:scout": "tsx tendi/scout/cli.ts"
+    "tendi:scout": "tsx tendi/scout/cli.ts",
+    "tendi:sss-smoke": "tsx tendi/sss/smoke.ts",
+    "tendi:sss-intro": "tsx tendi/sss/intro-cli.ts"
   },
   "keywords": [
     "mcp",
@@ -64,6 +66,7 @@
     "mammoth": "^1.13.0",
     "open": "^11.0.0",
     "pdf-parse": "^2.4.5",
+    "sharp": "^0.33.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

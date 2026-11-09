@@ -1,0 +1,54 @@
+{
+  "_note": "Element and page IDs of the master Canva design. A copy made with copy-design keeps the same IDs (checked on 7 Nov 2026). Locator for an element = <pageId>-<elementId>.",
+  "masterDesignId": "DAHZT4MaY2s",
+  "pages": {
+    "1": "PBpWZD1bPbqmRHnr",
+    "2": "PBFg3JZ8SzsrRKRm",
+    "3": "PBXxbS6chtJSYLNZ",
+    "4": "PBxnJGk5S2dSnlLb",
+    "5": "PBFZ6Yw5K81cxDGF",
+    "6": "PBsymtQx9RzY35X2",
+    "7": "PBldpsQPrnlmn7M0",
+    "8": "PBjldcb5v1F41GbH",
+    "9": "PBZbvbw0Fn6CvL1Z",
+    "10": "PBP31Scg1NbTbqMm",
+    "11": "PBG3Vx0VqYsd0zFG"
+  },
+  "text": {
+    "coverHeadline":   { "page": 1, "id": "LB0nxnMtBmyk436g", "limit": 64 },
+    "coverSub":        { "page": 1, "id": "LB5XdySMBS2tMjfY", "limit": 120 },
+    "whoStatement":    { "page": 2, "id": "LBtHC9N5PC0ZsmKq", "limit": 90 },
+    "whoParagraph":    { "page": 2, "id": "LBcbbPJmHHhmRqTx", "limit": 190 },
+    "howStatement":    { "page": 3, "id": "LBh3cjbwtJRmVkNl", "limit": 75 },
+    "howParagraph":    { "page": 3, "id": "LBMFD863L2wHfjbW", "limit": 190, "left": 109.92, "gapBelowStatement": 48 },
+    "ctaParagraph":    { "page": 9, "id": "LBsqTkg8yf6zM93Y", "limit": 140 },
+    "caption":         { "page": 11, "id": "LBbCFsWrQncpHp7W", "limit": 1300, "fontSize": 27 }
+  },
+  "timeline": [
+    { "pill": "LBDswf1wtQCzwGby", "pillMasterText": "year 1",  "header": "LBQF1ZSy60x23BGd", "text": "LB4sJvGgLxK6pdQd" },
+    { "pill": "LB44LpbhH7hvsy6G", "pillMasterText": "year 3",  "header": "LBYPXTRVxRhXtlTZ", "text": "LBfyvLCgJ8DTnj2T" },
+    { "pill": "LB9CyMDXsThr9gYH", "pillMasterText": "year 12", "header": "LBFzTB8GdwNNNcdH", "text": "LBsvTqB337HWdLr9" },
+    { "pill": "LBvzHBdLBCf9DMsR", "pillMasterText": "year 14", "header": "LBjNNH1Q4vCsgSSX", "text": "LBDVDXbrn62dz1kh" }
+  ],
+  "timelinePage": 4,
+  "timelineLimits": { "pill": 9, "header": 24, "text": 140 },
+  "takeaways": [
+    { "page": 5, "lesson": "LBfMJs93VhlG69zW", "support": "LBzZ13gC4sY5nh5X" },
+    { "page": 6, "lesson": "LBh6crqpWxqJczb1", "support": "LBR5rsLbZ2ZWgKP4" },
+    { "page": 7, "lesson": "LBx6tMqvYyDfDC9J", "support": "LBgbRbWXLBqjtPgS" },
+    { "page": 8, "lesson": "LB9NRWM68G7rg3wP", "support": "LBFqzwqrsYM34MDS" }
+  ],
+  "takeawayLimits": { "lesson": 85, "support": 140 },
+  "logos": [
+    { "page": 1, "id": "LBqYB4zNRjjd5JMw", "colour": "black", "top": 256.34, "left": 111.08, "height": 94.82, "maxWidth": 600 },
+    { "page": 2, "id": "LBmpbRyd8tLWqjt6", "colour": "black", "top": 88.74, "left": 462, "height": 38.51, "maxWidth": 330 },
+    { "page": 3, "id": "LBMntk4S4pv0T0K7", "colour": "black", "top": 88.74, "left": 462, "height": 38.51, "maxWidth": 330 },
+    { "page": 4, "id": "LB8yxYLTKRwRlmvG", "colour": "black", "top": 88.74, "left": 462, "height": 38.51, "maxWidth": 330 },
+    { "page": 5, "id": "LBhV7sm3MT763jLy", "colour": "white", "top": 88.74, "left": 462, "height": 38.51, "maxWidth": 330 },
+    { "page": 6, "id": "LBHc671wNQJqzTj0", "colour": "white", "top": 88.74, "left": 462, "height": 38.51, "maxWidth": 330 },
+    { "page": 7, "id": "LBbqTMWPMZtFfdf7", "colour": "white", "top": 88.74, "left": 462, "height": 38.51, "maxWidth": 330 },
+    { "page": 8, "id": "LBqZ8clstJ6Ld9Nm", "colour": "white", "top": 88.74, "left": 462, "height": 38.51, "maxWidth": 330 }
+  ],
+  "heroImage": { "page": 2, "id": "LBQ5fyblZvNZLKcW", "note": "Never replaced automatically: a photo needs the organisation's permission." },
+  "exportPages": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+}

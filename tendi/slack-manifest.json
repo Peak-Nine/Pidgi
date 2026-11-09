@@ -24,6 +24,7 @@
         "im:write",
         "channels:history",
         "groups:history",
+        "groups:read",
         "files:read",
         "files:write",
         "users:read",

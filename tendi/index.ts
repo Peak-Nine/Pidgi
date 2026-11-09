@@ -58,9 +58,13 @@ import { downloadPdf, exportArgs, pickDownloadUrl } from "./canva-export.js";
 import { canvaDocFill, canvaDocMap, type CanvaConn } from "./canva-doc.js";
 import { chunkText, cleanSlackText, dateInfo } from "./text.js";
 import { startScoutService, scoutConfig } from "./scout/service.js";
-import { boardCardFromInput, boardConfigNote, boardEnabled, findCards, findSameTender, listCards, scoutStartProposal, scoutThumbsUp, updateCard, upsertCard, STAGES, SOURCES, FITS, PLAYBOOKS, OUTCOMES, ADDED_BY } from "./notion-board.js";
+import { boardCardFromInput, boardConfigNote, boardEnabled, notionClient, findCards, findSameTender, listCards, scoutStartProposal, scoutThumbsUp, updateCard, upsertCard, STAGES, SOURCES, FITS, PLAYBOOKS, OUTCOMES, ADDED_BY } from "./notion-board.js";
 import { scoutDigestBlock, scoutItemBlock } from "./scout/handoff.js";
 import { itemsForDigest, type SeenRecord } from "./scout/store.js";
+import { createScaleSustain, type ScaleSustain } from "./sss/job.js";
+import { startSssService } from "./sss/service.js";
+import { notionFromClient } from "./sss/notion-log.js";
+import { missingTools as sssMissingCanvaTools, type CanvaLike } from "./sss/canva-build.js";
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
@@ -926,6 +930,47 @@ async function main(): Promise<void> {
       : null,
   });
   console.log(boardEnabled() ? "Tender Board (Notion) connected: tender_board tool on, Scout writes cards." : `Tender Board off: ${boardConfigNote()}`);
+
+  // ── Scale & Sustain Stories: the weekly LinkedIn case post (tendi/sss) ───────
+  function canvaForSss(): CanvaLike | null {
+    if (!canva) return null;
+    const bridge = canva;
+    const nameOf = (tool: string) => [`canva_${tool}`, `canva_${tool.replace(/-/g, "_")}`].find((x) => bridge.has(x));
+    return {
+      has: (tool) => !!nameOf(tool),
+      ensure: async () => {
+        if (!bridge.connected()) await bridge.connect();
+      },
+      schema: (tool) => bridge.tools.find((t) => t.name === nameOf(tool))?.input_schema,
+      call: async (tool, args) => {
+        const t = nameOf(tool);
+        if (!t) return { isError: true, text: `Canva tool ${tool} is not available on this connection.` };
+        const blocked = masterTemplateGuard(t, args);
+        if (blocked) return { isError: true, text: blocked };
+        return bridge.call(t, args);
+      },
+    };
+  }
+  let sss: ScaleSustain | null = null;
+  let sssOff = "";
+  if (!process.env.NOTION_TOKEN) sssOff = "NOTION_TOKEN is not set (Pidgi's Notion key, also used by the Tender Board)";
+  else if (!canva) sssOff = "Canva is not configured";
+  else {
+    sss = createScaleSustain({
+      slack: slackWeb,
+      notion: notionFromClient(notionClient() as any),
+      canva: canvaForSss(),
+      anthropic,
+      model: process.env.SSS_MODEL || MODEL,
+      slackToken: slackBotToken,
+    });
+    const sssCanva = canvaForSss();
+    if (canva.connected() && sssCanva) {
+      const missing = sssMissingCanvaTools(sssCanva);
+      if (missing.length) console.warn(`[sss] Canva connection lacks ${missing.join(", ")}: weekly builds will fail until Canva is reconnected with the newer tools.`);
+    }
+  }
+  startSssService({ app, router: receiver.router, adminOk, sss, offReason: sssOff, firstTime, botUserId: () => botUserId });
 
   app.event("app_mention", async ({ event, say }) => {
     const e: any = event;
