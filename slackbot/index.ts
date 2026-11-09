@@ -45,6 +45,8 @@ import { saveFormValue, loadFormValue, formsPersistent } from "./formstore.js";
 import { runTaskCapture, registerTaskActions, taskCaptureEnabled, TaskDeps } from "./tasks.js";
 import { runGtd, registerGtdActions } from "./gtd.js";
 import { parseGtd, bareNotionLink, isRecordingPage } from "./recordings.js";
+import { buildPlan, savePlan, planBlocks, fallbackText, registerLaunchActions, proposeToolDef, type TlCall } from "./dealwon.js";
+import { downloadSlackFile, extractText, normalise, type SlackFileRef, type ExtractedFile } from "../tendi/files.js";
 import {
   looksLikeTaskRequest,
   hiddenNotionIds,
@@ -110,6 +112,26 @@ const PIGEON_LINES = [
 ];
 
 // Slack DM channel ids start with "D": only the person and Pidgi are in them.
+/** Per-turn state the tools can see: did it touch a private board, and where in Slack is it. */
+interface Turn {
+  private: boolean;
+  slack?: { channel: string; thread_ts?: string };
+}
+
+// Attachments: how much of each file goes into the model's turn (the rest is cut, and said so).
+const ATTACH_MAX_FILES = 3;
+const ATTACH_CHARS = Number(process.env.PIDGI_ATTACHMENT_CHARS) || 60_000;
+// A message that points at a file posted earlier in the thread ("the attached offer", "deze offerte").
+const REFERS_TO_FILE = /\b(attach|attached|attachment|offer|offerte|quot|quotation|proposal|voorstel|bijlage|pdf|file|document|doc)\b/i;
+
+/** The block added to the user's turn for one attachment. */
+function attachmentBlock(x: ExtractedFile): string {
+  if (!x.ok) return `[Attachment "${x.name}": ${x.note}]`;
+  const cut = x.chars > ATTACH_CHARS;
+  const notes = [x.note, cut ? `only the first ${ATTACH_CHARS} of ${x.chars} characters are included` : ""].filter(Boolean).join("; ");
+  return `[Attachment "${x.name}", ${x.chars} characters extracted${notes ? ` (${notes})` : ""}]\n${x.text.slice(0, ATTACH_CHARS)}\n[End of attachment "${x.name}"]`;
+}
+
 function isDirectMessage(convoKey: string): boolean {
   return /^D/.test(convoKey);
 }
@@ -211,6 +233,41 @@ Multi-project / multi-person planning discipline (do this automatically, unpromp
   milestones once only — never repeat them.
 - For any visual view (Gantt, timeline, who-works-on-what, capacity heatmap), Slack cannot draw
   it: call get_dashboard_link and share the dashboard URL.
+
+Deal won → Teamleader project (when someone says the client accepted, the deal is won, the quotation
+is accepted, or asks to "make a Teamleader project" from an offer, often with the offer attached):
+This creates the project itself. The "Setting up a NEW project" routine below is a different, later
+step (Slack channel, Notion, meetings) for a project that already exists in Teamleader.
+1. Find the deal: use the id if given, otherwise teamleader_list_deals and match the client and offer
+   title. Then the quotation: look for it in teamleader_get_deal. teamleader_list_quotations can't
+   filter by deal (only by quotation id), so don't use it to search. If the deal shows no quotation,
+   ask for the quotation's Teamleader link or id. If there is more than one candidate deal or
+   quotation, list them and ask which one. Never guess.
+2. Read teamleader_get_quotation (grouped lines and totals).
+3. Gate structure: from the attached offer when there is one, otherwise from the quotation's grouped
+   lines. One group per gate or phase, in order, each with what the client pays for it (EUR excl. VAT)
+   and its deliverables with hours. Copy amounts and hours exactly as written; never estimate, never
+   spread a total over gates yourself. If the offer gives days rather than hours, ask how many hours a
+   day counts for. If a deliverable has no hours, pass hours null. If the offer and the quotation
+   disagree, say where and ask which one is right. A gate whose scope and price are still open (e.g.
+   defined after a go/no-go) is a placeholder: placeholder true, revenue 0.
+4. Start date: Gate 1 starts on the project start date. If nobody stated it, ask. Gate dates follow
+   the offer; when it only gives durations, Gate 1 runs from the start for that duration and each next
+   gate starts the day after the previous one ends (use date_info, never compute dates in your head).
+   Leave the end date out for a gate with an open end.
+5. Check teamleader_list_projects_v2 for a project that already exists for this client and offer. If
+   one does, say so and ask before going on.
+6. Call propose_project_launch. Code works out the internal budget (60% of each gate's revenue), checks
+   your numbers against the quotation total and posts a card with a button. If it returns problems, fix
+   them or ask. When it says the card is posted, answer in one or two lines: check the card, plus
+   anything you were unsure about. Do not repeat the card's content.
+You cannot mark a deal won or a quotation accepted yourself: only that card's button does it, after a
+person clicks it. Never say the project exists before the card reports it. If someone only wants a deal
+marked won without a project, tell them to do it in Teamleader or to ask for the full launch.
+
+Attachments: when a message carries files, their extracted text is added to it between
+[Attachment "name" ...] and [End of attachment "name"]. Treat it as the document the person shared.
+If extraction failed, the note says why: tell the person and don't work around it from memory.
 
 Setting up a NEW project (when asked to "set up", "spin up", "launch" or "create the workspace for" a project):
 Do these in order. First present the WHOLE plan (channel name, page location, meeting times and attendees, welcome draft) and get an explicit, formal go. A plan is not a go — wait for a clear yes before you create, change, invite, post or book anything.
@@ -323,7 +380,9 @@ async function main(): Promise<void> {
   // go through get_project_reservations / get_user_reservations, which page through everything
   // and resolve the project from each task in code. These stay callable by our own code via
   // mcp.callTool — only the model's direct access is withheld.
-  const TL_DENY = new Set<string>(["teamleader_list_reservations"]);
+  // Winning a deal and accepting a quotation can't be undone, so the model can't call them at all:
+  // they only run from the deal-won card's button (see dealwon.ts), after a person clicks it.
+  const TL_DENY = new Set<string>(["teamleader_list_reservations", "teamleader_win_deal", "teamleader_accept_quotation"]);
   const anthropicTools = listed.tools
     .filter((t) => !TL_DENY.has(t.name))
     .map((t) => ({
@@ -374,6 +433,20 @@ async function main(): Promise<void> {
     },
   } as any);
   console.log("Date tool enabled.");
+
+  // Deal won → project: the model proposes, code checks and posts a card, the button writes.
+  anthropicTools.push(proposeToolDef as any);
+  const tlCall: TlCall = async (tool, args) => {
+    const r: any = await mcp.callTool({ name: "teamleader_" + tool, arguments: args || {} });
+    const txt = Array.isArray(r?.content) ? r.content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("") : "";
+    if (r?.isError) throw new Error(txt.slice(0, 500) || `teamleader_${tool} failed`);
+    try {
+      return JSON.parse(txt);
+    } catch {
+      return { text: txt };
+    }
+  };
+  console.log("Deal-won launch tool enabled (card + button).");
 
   // Project-scoped reservations, resolved and labelled in code so the model can't pull
   // or mislabel another project's planning.
@@ -518,7 +591,7 @@ async function main(): Promise<void> {
   // Assigned once the Bolt app is built (see below); used by the Slack admin tools.
   let slackWeb: any = null;
 
-  async function callTool(name: string, input: any, slackUserId: string, turn?: { private: boolean }): Promise<{ text: string; isError: boolean }> {
+  async function callTool(name: string, input: any, slackUserId: string, turn?: Turn): Promise<{ text: string; isError: boolean }> {
     if (isWriteTool(name) && !writeAllowed(slackUserId)) {
       return {
         isError: true,
@@ -527,6 +600,32 @@ async function main(): Promise<void> {
     }
     if (name === "get_dashboard_link") {
       return { text: dashboardLink(), isError: false };
+    }
+    if (name === "propose_project_launch") {
+      if (!writeAllowed(slackUserId)) {
+        return { isError: true, text: "Blocked: only people on Pidgi's write list can launch a project. Ask Niels." };
+      }
+      const where = turn?.slack;
+      if (!where?.channel || !slackWeb) return { isError: true, text: "I can only post a launch card inside a Slack conversation." };
+      try {
+        const { plan, errors } = await buildPlan(input, { requester: slackUserId, channel: where.channel, thread_ts: where.thread_ts }, tlCall);
+        if (!plan) return { isError: true, text: `Not posted. Fix these first:\n- ${errors.join("\n- ")}` };
+        const posted: any = await slackWeb.chat.postMessage({
+          channel: plan.channel,
+          thread_ts: plan.thread_ts,
+          text: fallbackText(plan),
+          blocks: planBlocks(plan),
+          unfurl_links: false,
+        });
+        plan.card_ts = posted?.ts;
+        savePlan(plan);
+        return {
+          isError: false,
+          text: `Card posted in the thread. Nothing is written to Teamleader until someone on the write list clicks it.${plan.warnings.length ? ` Warnings shown on the card: ${plan.warnings.join(" | ")}` : ""}`,
+        };
+      } catch (e: any) {
+        return { isError: true, text: `Couldn't post the launch card: ${e?.message || e}` };
+      }
     }
     if (name === "date_info") {
       const out: any = {};
@@ -899,11 +998,12 @@ async function main(): Promise<void> {
     userText: string,
     slackUserId: string,
     convoKey: string,
-    identity?: { name: string; email: string } | null
+    identity?: { name: string; email: string } | null,
+    slack?: { channel: string; thread_ts?: string }
   ): Promise<string> {
     const history = threadHistory.get(convoKey) ?? [];
     const messages: Anthropic.MessageParam[] = [...history, { role: "user", content: userText }];
-    const turn = { private: false };
+    const turn: Turn = { private: false, slack };
     // System is split into two blocks so the big static prompt (and the tools before it)
     // form a stable, cacheable prefix that is shared across users and reused on every loop
     // step. The cache breakpoint sits on the static block; the per-user identity line goes
@@ -1044,6 +1144,7 @@ async function main(): Promise<void> {
   const receiver = new ExpressReceiver({ signingSecret: slackSigningSecret });
   const app = new App({ token: slackBotToken, receiver });
   slackWeb = app.client; // used by create_slack_channel / send_slack_message
+  registerLaunchActions(app, { mayWrite: writeAllowed, tl: tlCall });
 
   // Task capture: "@Pidgi turn this into a task for Laura" → draft card → ✅ → Notion board.
   let taskDeps: TaskDeps | null = null;
@@ -1216,8 +1317,54 @@ async function main(): Promise<void> {
     );
   }
 
-  async function handle(text: string, slackUserId: string, say: any, convoKey: string, replyThreadTs?: string, ev?: any) {
+  /** Files on a message, when Slack left them off the event. */
+  async function messageFiles(channel: string, ts: string): Promise<SlackFileRef[]> {
+    try {
+      const r: any = await slackWeb.conversations.replies({ channel, ts, limit: 1, inclusive: true });
+      const msg = (r?.messages || []).find((m: any) => m?.ts === ts);
+      return Array.isArray(msg?.files) ? msg.files : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** The files of the most recent earlier message in this thread that has any. */
+  async function threadFiles(channel: string, threadTs: string | undefined, beforeTs: string): Promise<SlackFileRef[]> {
+    if (!threadTs) return [];
+    try {
+      const r: any = await slackWeb.conversations.replies({ channel, ts: threadTs, limit: 100 });
+      const msgs = (r?.messages || []).filter((m: any) => Number(m?.ts) < Number(beforeTs) && Array.isArray(m?.files) && m.files.length);
+      const last = msgs[msgs.length - 1];
+      return last ? last.files : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Download and extract each file (PDF, Word, text). Failures become a note the model passes on. */
+  async function readAttachments(files: SlackFileRef[]): Promise<string[]> {
+    const out: string[] = [];
+    for (const f of files.slice(0, ATTACH_MAX_FILES)) {
+      let x: ExtractedFile;
+      try {
+        x = await extractText(f, await downloadSlackFile(f, slackBotToken));
+      } catch (e: any) {
+        x = { name: f.name || f.title || "attachment", ok: false, text: "", chars: 0, note: `download failed: ${e?.message || e}` };
+      }
+      if (x.ok) x.text = normalise(x.text);
+      console.log(`[attach] ${x.name}: ${x.ok ? `${x.chars} chars` : x.note}`);
+      out.push(attachmentBlock(x));
+    }
+    if (files.length > ATTACH_MAX_FILES) out.push(`[${files.length - ATTACH_MAX_FILES} more attachment(s) not read: I read at most ${ATTACH_MAX_FILES} per message]`);
+    return out;
+  }
+
+  async function handle(text: string, slackUserId: string, say: any, convoKey: string, replyThreadTs?: string, ev?: any, files: SlackFileRef[] = []) {
     const cleaned = text.replace(/<@[A-Z0-9]+>/g, "").trim();
+    if (!cleaned && files.length) {
+      // Just a file, no words: read it and ask what to do with it.
+      return handle("(no message, only the attached file: say what it is in one line and ask what I want done with it)", slackUserId, say, convoKey, replyThreadTs, ev, files);
+    }
     if (!cleaned) {
       await say({ text: "Ask me about the team's planning, capacity, projects or reservations.", thread_ts: replyThreadTs });
       return;
@@ -1315,7 +1462,12 @@ async function main(): Promise<void> {
     }
     try {
       const identity = await resolveIdentity(slackUserId);
-      let answer = await ask(cleaned, slackUserId, convoKey, identity);
+      // Files on the message, or (when the message points at one) the latest file earlier in the thread.
+      let attached = files;
+      if (!attached.length && ev && REFERS_TO_FILE.test(cleaned)) attached = await threadFiles(ev.channel, ev.thread_ts, ev.ts);
+      const blocks = attached.length ? await readAttachments(attached) : [];
+      const userText = blocks.length ? `${cleaned}\n\n${blocks.join("\n\n")}` : cleaned;
+      let answer = await ask(userText, slackUserId, convoKey, identity, ev?.channel ? { channel: ev.channel, thread_ts: replyThreadTs } : undefined);
       // Defensive: strip any stray legacy token that may linger in memory.
       answer = answer.split("<<DETAIL_FOLLOWUP>>").join("").trim();
       // Last line of defence: an answer that names a private board this person isn't part of.
@@ -1342,22 +1494,25 @@ async function main(): Promise<void> {
     // this thread so later replies in it continue without needing another @mention.
     const root = e.thread_ts || e.ts;
     joinThread(e.channel, root);
-    await handle(e.text || "", e.user, say, e.channel, root, e);
+    const files: SlackFileRef[] = Array.isArray(e.files) && e.files.length ? e.files : await messageFiles(e.channel, e.ts);
+    await handle(e.text || "", e.user, say, e.channel, root, e, files);
   });
 
   app.event("message", async ({ event, say }) => {
     const e: any = event;
-    if (e.bot_id || e.subtype) return;
+    // A message with a file arrives with subtype "file_share"; every other subtype is ignored.
+    if (e.bot_id || (e.subtype && e.subtype !== "file_share")) return;
     if (!firstTime(`${e.channel}:${e.ts}`)) return;
+    const files: SlackFileRef[] = Array.isArray(e.files) ? e.files : [];
     if (e.channel_type === "im") {
       // Plain DM: full assistant, reply top-level (stay in a thread only if in one).
-      await handle(e.text || "", e.user, say, e.channel, e.thread_ts, e);
+      await handle(e.text || "", e.user, say, e.channel, e.thread_ts, e, files);
       return;
     }
     // In a channel thread Pidgi has already joined, keep answering follow-ups (e.g. "yes
     // thanks") without a fresh @mention, and reply inside that same thread.
     if (inActiveThread(e.channel, e.thread_ts)) {
-      await handle(e.text || "", e.user, say, e.channel, e.thread_ts, e);
+      await handle(e.text || "", e.user, say, e.channel, e.thread_ts, e, files);
       return;
     }
     // Otherwise Pidgi stays silent on normal channel chatter, EXCEPT a solo 🕊️ summon.
