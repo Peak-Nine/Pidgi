@@ -18,7 +18,7 @@ import { textOps, logoOps, assetIdFrom, exportUrl, type LogoSlot } from "../tend
 import { encodeNotes, decodeNotes, weekStartBrussels, isoDate, buildsThisWeek, brusselsDay } from "../tendi/sss/notion-log";
 import { createScaleSustain, loadSssState, saveSssState } from "../tendi/sss/job";
 import { weeklyDue } from "../tendi/sss/service";
-import { buildPost, editingGeneration, toV1Op, collectElementIds, styleSafeReplace } from "../tendi/sss/canva-build";
+import { buildPost, editingGeneration, toV1Op, collectElementIds, styleSafeReplace, v2Texts } from "../tendi/sss/canva-build";
 import { INTRO_TEXT, postText } from "../tendi/sss/slack-messages";
 import { sssAllowedUsers } from "../tendi/sss/config";
 import { masterTemplateGuard } from "../tendi/canva";
@@ -241,6 +241,11 @@ describe("Scale & Sustain Stories: Canva's older editing tools (Tendi's connecti
     const resolve = (el: string) => ids.find((x) => x === el || x.endsWith(`-${el}`)) || el;
     expect(toV1Op({ type: "replace_text", locator_id: "PBa-LBx", text: "t" }, resolve, () => "PBa", 1)).toEqual({ type: "replace_text", element_id: "PBa-LBx", text: "t" });
     expect(toV1Op({ type: "delete_element", locator_id: "PBa-LBy" }, resolve, () => "PBa", 1)).toEqual({ type: "delete_element", element_id: "LBy" });
+  });
+
+  it("reads current texts from a read-design answer (boxes and pill shapes)", () => {
+    const t = v2Texts({ design_content: { pages: [{ elements: [{ locator_id: "P-L1", textRegions: [{ characters: "Shared funding" }] }, { locator_id: "P-L2", textContents: [{ textRegions: [{ characters: "year 1" }] }] }, { locator_id: "P-L3", type: "rect" }] }] } });
+    expect(t).toEqual({ "P-L1": ["Shared funding"], "P-L2": ["year 1"] });
   });
 
   it("style-safe replace: find_and_replace on the current text, extra runs emptied", () => {

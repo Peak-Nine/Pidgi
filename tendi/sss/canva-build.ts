@@ -173,6 +173,21 @@ export function styleSafeReplace(op: any, current: string[] | undefined): any[] 
   ];
 }
 
+/** Text per element in a read-design design_content answer: locator_id -> the texts of its regions (text boxes and shapes). */
+export function v2Texts(j: any): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  const dc = typeof j?.design_content === "string" ? parseJson(j.design_content) : j?.design_content;
+  const stack: any[] = [...(dc?.pages || j?.pages || [])];
+  while (stack.length) {
+    const x = stack.pop();
+    if (!x || typeof x !== "object") continue;
+    const regions = Array.isArray(x.textRegions) ? x.textRegions : Array.isArray(x.textContents) ? x.textContents.flatMap((t: any) => t?.textRegions || []) : null;
+    if (typeof x.locator_id === "string" && regions && regions.length) out[x.locator_id] = regions.map((r: any) => String(r?.characters ?? ""));
+    for (const v of Object.values(x)) if (v && typeof v === "object") stack.push(v);
+  }
+  return out;
+}
+
 /** Turn a v2 operation (locator_id = <pageId>-<elementId>) into a v1 one (element_id as Canva listed it). */
 export function toV1Op(op: any, resolve: (elementId: string) => string, pageIdOf: (page: number | string) => string, page: number): any {
   const { locator_id, ...rest } = op || {};
@@ -188,13 +203,28 @@ async function openSession(canva: CanvaLike, designId: string, what: string): Pr
     const read = await callJson(canva, TOOLS.read, { design_id: designId, open_transaction: true, filter: { fields: ["page_metadata"], page_indices: [1] }, ...intent(what) });
     const tx = read?.transaction?.transaction_id || read?.transaction_id;
     if (!tx) throw new Error(`Canva did not open an editing session on ${designId}. Its answer began: ${JSON.stringify(read).slice(0, 300)}`);
+    // The current text of every box, so replace_text can become a style-keeping find_and_replace
+    // (seen on 9 Nov 2026: replace_text on the master's takeaway lessons dropped them to 16 px in another font, on both tool generations).
+    let texts: Record<string, string[]> = {};
+    try {
+      texts = v2Texts(await callJson(canva, TOOLS.read, { design_id: designId, transaction_id: tx, filter: { fields: ["design_content"] }, ...intent("Read the current text of each box before filling") }));
+    } catch {
+      /* fall back to replace_text */
+    }
+    const supports = (t: string) => schemaSupports(canva, TOOLS.edit, t);
     return {
       gen,
       tx: String(tx),
       notes: [],
-      supports: (t) => schemaSupports(canva, TOOLS.edit, t),
+      supports,
       async edit(page, operations, w) {
-        const res = await callJson(canva, TOOLS.edit, { transaction_id: tx, page_index: page, operations, finalize: "keep_open", ...intent(w) });
+        const ops = operations.flatMap((o) => {
+          if (o.type !== "replace_text" || !supports("find_and_replace_text")) return [o];
+          const out = styleSafeReplace(o, texts[o.locator_id]);
+          if (out[0]?.type === "find_and_replace_text") texts[o.locator_id] = [String(o.text ?? "")];
+          return out;
+        });
+        const res = await callJson(canva, TOOLS.edit, { transaction_id: tx, page_index: page, operations: ops, finalize: "keep_open", ...intent(w) });
         checkResults(res, page);
         return res;
       },
