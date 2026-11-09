@@ -2,11 +2,12 @@
  * Build this week's carousel from the master Canva template, through Tendi's own
  * Canva MCP connection (CanvaBridge, Niels's login).
  *
- * Tool names are the newer generation (copy-design, read-design with
- * open_transaction, edit-design, create-upload-url, export-design). Tendi's
- * connection had the older editing tools on 8 Oct 2026 (start-editing-transaction
- * and friends); if it still does, the build stops with a clear message instead of
- * guessing, and the Slack post says so. canva_status lists the tools Tendi sees.
+ * Works with both generations of Canva's editing tools: read-design with
+ * open_transaction + edit-design (newer), or start-editing-transaction +
+ * perform-editing-operations + commit-editing-transaction (older; Tendi's
+ * connection still had these on 9 Nov 2026). Operations a connection does not
+ * list in its own schema are skipped and reported; if images cannot be placed,
+ * the logo spots stay empty and Tendi asks in the thread.
  *
  * Never edits the master design, never replaces the page 2 photo.
  */
@@ -38,8 +39,18 @@ const pages: Record<string, string> = map.pages;
 const loc = (page: number | string, id: string) => `${pages[String(page)]}-${id}`;
 const intent = (s: string) => ({ user_intent: s.slice(0, 250) });
 
+/** Which generation of Canva's editing tools this connection has (see canva-doc.ts: Tendi's had v1 on 8 Oct and on 9 Nov 2026). */
+export function editingGeneration(canva: CanvaLike): "v2" | "v1" | null {
+  if (canva.has("read-design") && canva.has("edit-design")) return "v2";
+  if (canva.has("start-editing-transaction") && canva.has("perform-editing-operations") && canva.has("commit-editing-transaction")) return "v1";
+  return null;
+}
+
+/** Tools the build cannot do without. Logo upload is optional: without it the logo spots stay empty and Tendi asks. */
 export function missingTools(canva: CanvaLike): string[] {
-  return Object.values(TOOLS).filter((t) => !canva.has(t));
+  const out = [TOOLS.copy, TOOLS.export].filter((t) => !canva.has(t));
+  if (!editingGeneration(canva)) out.push("an editing tool set (read-design + edit-design, or start-editing-transaction + perform-editing-operations + commit-editing-transaction)");
+  return out;
 }
 
 /** Call a tool and parse its JSON answer; a Canva error becomes an exception. */
@@ -86,11 +97,119 @@ export function assetIdFrom(body: string): string | null {
   return m ? m[1] : null;
 }
 
-async function edit(canva: CanvaLike, tx: string, page: number, operations: any[], what: string): Promise<any> {
-  const res = await callJson(canva, TOOLS.edit, { transaction_id: tx, page_index: page, operations, finalize: "keep_open", ...intent(what) });
-  const failed = (res.edit_operation_results || []).filter((r: any) => /fail|error/i.test(String(r?.status || "")));
-  if (failed.length) throw new Error(`Canva edit on page ${page} failed: ${failed.map((f: any) => f.error?.message || f.message || f.status).join("; ")}`);
-  return res;
+function checkResults(res: any, page: number): void {
+  const failed = (res?.edit_operation_results || []).filter((r: any) => /fail|error/i.test(String(r?.status || "")));
+  if (failed.length) throw new Error(`Canva edit on page ${page} failed: ${failed.map((f: any) => `${f.operation_info?.type || ""} ${f.error?.message || f.message || f.status}`.trim()).join("; ")}`);
+}
+
+/** One editing session on one design, the same for both tool generations. */
+export interface EditSession {
+  gen: "v1" | "v2";
+  tx: string;
+  supports: (opType: string) => boolean;
+  edit: (page: number, operations: any[], what: string) => Promise<any>;
+  commit: (what: string) => Promise<void>;
+  cancel: () => Promise<void>;
+  notes: string[];
+}
+
+/** Does the edit tool's own schema list this operation type? Without a schema, assume yes. */
+function schemaSupports(canva: CanvaLike, tool: string, opType: string): boolean {
+  const sc = canva.schema?.(tool);
+  if (!sc) return true;
+  return JSON.stringify(sc).includes(`"${opType}"`);
+}
+
+/** Every element id string in a v1 answer (richtexts, fills, anything with element_id). */
+export function collectElementIds(j: any): string[] {
+  const out = new Set<string>();
+  const stack: any[] = [j];
+  while (stack.length) {
+    const x = stack.pop();
+    if (!x || typeof x !== "object") continue;
+    for (const k of ["element_id", "locator_id"]) if (typeof x[k] === "string" && x[k]) out.add(x[k]);
+    for (const v of Object.values(x)) if (v && typeof v === "object") stack.push(v);
+  }
+  return [...out];
+}
+
+/** Page ids by page number in a v1 answer. */
+export function v1PageIds(j: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of Array.isArray(j?.pages) ? j.pages : []) {
+    const n = Number(p?.page_number ?? p?.index);
+    const id = p?.page_id || p?.id;
+    if (n && id) out[String(n)] = String(id);
+  }
+  return out;
+}
+
+/** Turn a v2 operation (locator_id = <pageId>-<elementId>) into a v1 one (element_id as Canva listed it). */
+export function toV1Op(op: any, resolve: (elementId: string) => string, pageIdOf: (page: number | string) => string, page: number): any {
+  const { locator_id, ...rest } = op || {};
+  const out: any = { ...rest };
+  if (locator_id) out.element_id = resolve(String(locator_id).split("-").pop() || String(locator_id));
+  if (op?.type === "insert_fill") out.page_id = pageIdOf(page);
+  return out;
+}
+
+async function openSession(canva: CanvaLike, designId: string, what: string): Promise<EditSession> {
+  const gen = editingGeneration(canva);
+  if (gen === "v2") {
+    const read = await callJson(canva, TOOLS.read, { design_id: designId, open_transaction: true, filter: { fields: ["page_metadata"], page_indices: [1] }, ...intent(what) });
+    const tx = read?.transaction?.transaction_id || read?.transaction_id;
+    if (!tx) throw new Error(`Canva did not open an editing session on ${designId}. Its answer began: ${JSON.stringify(read).slice(0, 300)}`);
+    return {
+      gen,
+      tx: String(tx),
+      notes: [],
+      supports: (t) => schemaSupports(canva, TOOLS.edit, t),
+      async edit(page, operations, w) {
+        const res = await callJson(canva, TOOLS.edit, { transaction_id: tx, page_index: page, operations, finalize: "keep_open", ...intent(w) });
+        checkResults(res, page);
+        return res;
+      },
+      async commit(w) {
+        await callJson(canva, TOOLS.edit, { transaction_id: tx, finalize: "commit", ...intent(w) });
+      },
+      async cancel() {
+        await canva.call(TOOLS.edit, { transaction_id: tx, finalize: "cancel", ...intent("Discard the failed Scale & Sustain build") }).catch(() => undefined);
+      },
+    };
+  }
+  if (gen === "v1") {
+    const j = await callJson(canva, "start-editing-transaction", { design_id: designId, ...intent(what) });
+    const tx = j?.transaction?.transaction_id || j?.transaction_id;
+    if (!tx) throw new Error(`Canva did not open an editing session on ${designId}. Its answer began: ${JSON.stringify(j).slice(0, 300)}`);
+    const ids = collectElementIds(j);
+    const pageIds = v1PageIds(j);
+    const notes: string[] = [];
+    const resolve = (el: string) => ids.find((x) => x === el) || ids.find((x) => x.endsWith(`-${el}`) || x.endsWith(el)) || el;
+    const pageIdOf = (n: number | string) => pageIds[String(n)] || pages[String(n)];
+    const supports = (t: string) => schemaSupports(canva, "perform-editing-operations", t);
+    return {
+      gen,
+      tx: String(tx),
+      notes,
+      supports,
+      async edit(page, operations, w) {
+        const keep = operations.filter((o) => supports(o.type));
+        const dropped = operations.filter((o) => !supports(o.type)).map((o) => o.type);
+        if (dropped.length) notes.push(`page ${page}: Canva's older tools do not offer ${[...new Set(dropped)].join(", ")}`);
+        if (!keep.length) return {};
+        const res = await callJson(canva, "perform-editing-operations", { transaction_id: tx, page_index: page, operations: keep.map((o) => toV1Op(o, resolve, pageIdOf, page)), ...intent(w) });
+        checkResults(res, page);
+        return res;
+      },
+      async commit(w) {
+        await callJson(canva, "commit-editing-transaction", { transaction_id: tx, ...intent(w) });
+      },
+      async cancel() {
+        await canva.call("cancel-editing-transaction", { transaction_id: tx, ...intent("Discard the failed Scale & Sustain build") }).catch(() => undefined);
+      },
+    };
+  }
+  throw new Error("Tendi's Canva connection has no editing tools (check canva_status)");
 }
 
 export interface LogoSlot {
@@ -172,24 +291,24 @@ export function textOps(deck: Deck, { title }: { title?: string } = {}): Record<
 }
 
 function findElement(res: any, id: string): any {
-  const stack: any[] = [res?.document?.page, res?.page, res?.document].filter(Boolean);
+  const stack: any[] = [res?.document?.page, res?.page, res?.document, res?.richtexts].filter(Boolean);
   while (stack.length) {
     const x = stack.pop();
     if (!x || typeof x !== "object") continue;
-    if (x.id === id || (typeof x.locator_id === "string" && x.locator_id.endsWith(`-${id}`))) return x;
+    const eid = typeof x.element_id === "string" ? x.element_id : "";
+    if (x.id === id || (typeof x.locator_id === "string" && x.locator_id.endsWith(`-${id}`)) || (eid && (eid === id || eid.endsWith(`-${id}`)))) {
+      // v1 answers keep the box in containerElement {position, dimension}
+      const pos = x.containerElement?.position || x.position;
+      const dim = x.containerElement?.dimension || x.dimension;
+      return pos && dim && x.top === undefined ? { top: pos.top, height: dim.height } : x;
+    }
     for (const v of Object.values(x)) if (v && typeof v === "object") stack.push(v);
   }
   return null;
 }
 
-async function openTransaction(canva: CanvaLike, designId: string, what: string): Promise<string> {
-  const read = await callJson(canva, TOOLS.read, { design_id: designId, open_transaction: true, filter: { fields: ["page_metadata"], page_indices: [1] }, ...intent(what) });
-  const tx = read?.transaction?.transaction_id || read?.transaction_id;
-  if (!tx) throw new Error(`Canva did not open an editing session on ${designId}. Its answer began: ${JSON.stringify(read).slice(0, 300)}`);
-  return String(tx);
-}
-
 async function designUrls(canva: CanvaLike, designId: string): Promise<{ edit_url?: string; view_url?: string }> {
+  if (!canva.has(TOOLS.read)) return {};
   try {
     const j = await callJson(canva, TOOLS.read, { design_id: designId, filter: { fields: ["design_metadata"] }, ...intent("Get the links of the new Scale & Sustain Stories design") });
     return j?.design_metadata?.urls || j?.urls || {};
@@ -205,6 +324,14 @@ export interface BuiltPost {
   pdf: Buffer | null;
   cover: Buffer | null;
   exportNote?: string;
+  /** False when the logo could not be placed (none found, or this Canva connection cannot upload or insert images). */
+  logoPlaced: boolean;
+  notes: string[];
+}
+
+/** Can this session upload and place an image? */
+function canPlaceImages(canva: CanvaLike, session: EditSession): boolean {
+  return canva.has(TOOLS.uploadUrl) && session.supports("insert_fill");
 }
 
 /**
@@ -215,7 +342,7 @@ export interface BuiltPost {
 export async function buildPost({ canva, deck, issueNo, org, logo }: { canva: CanvaLike; deck: Deck; issueNo: number; org: string; logo: LogoVariants | null }): Promise<BuiltPost> {
   await canva.ensure?.();
   const missing = missingTools(canva);
-  if (missing.length) throw new Error(`Tendi's Canva connection lacks ${missing.join(", ")} (it may still have the older editing tools); reconnect Canva with npm run tendi:canva-login and check canva_status`);
+  if (missing.length) throw new Error(`Tendi's Canva connection lacks ${missing.join(", ")}; check canva_status`);
   const title = SSS.designTitle(issueNo, org);
   const copy = await callJson(canva, TOOLS.copy, { design_id: map.masterDesignId, ...intent(`Copy the Scale & Sustain master for ${title}`) });
   const designId: string | undefined =
@@ -223,11 +350,13 @@ export async function buildPost({ canva, deck, issueNo, org, logo }: { canva: Ca
   if (!designId || designId === map.masterDesignId) throw new Error(`could not read the new design id from Canva's copy answer: ${JSON.stringify(copy).slice(0, 300)}`);
   const urls = copy?.design?.urls?.edit_url ? copy.design.urls : await designUrls(canva, designId);
 
-  const tx = await openTransaction(canva, designId, `Open ${title} for filling`);
+  const session = await openSession(canva, designId, `Open ${title} for filling`);
 
   let blackId: string | null = null;
   let whiteId: string | null = null;
-  if (logo) {
+  const placeable = canPlaceImages(canva, session);
+  if (logo && !placeable) session.notes.push("this Canva connection cannot upload or place images, so the logo spots stay empty");
+  if (logo && placeable) {
     blackId = await uploadPng(canva, logo.black, `${org} logo (black)`);
     whiteId = await uploadPng(canva, logo.white, `${org} logo (white)`);
   }
@@ -242,45 +371,47 @@ export async function buildPost({ canva, deck, issueNo, org, logo }: { canva: Ca
     for (const page of Object.keys(ops)
       .map(Number)
       .sort((a, b) => a - b)) {
-      const res = await edit(canva, tx, page, ops[page], `Fill page ${page} of ${title}`);
-      if (page === 3) {
+      const res = await session.edit(page, ops[page], `Fill page ${page} of ${title}`);
+      if (page === 3 && session.supports("position_element")) {
         // Keep a fixed gap under the "how" statement, whatever its length.
         const st = findElement(res, map.text.howStatement.id);
         if (st && Number.isFinite(Number(st.top)) && Number.isFinite(Number(st.height))) {
-          await edit(
-            canva,
-            tx,
+          await session.edit(
             3,
             [{ type: "position_element", locator_id: loc(3, map.text.howParagraph.id), top: Math.round(Number(st.top) + Number(st.height) + map.text.howParagraph.gapBelowStatement), left: map.text.howParagraph.left }],
             `Space the page 3 paragraph of ${title}`,
           );
-        }
+        } else session.notes.push("could not read the page 3 statement height, so the paragraph below it kept its template position");
       }
     }
-    await callJson(canva, TOOLS.edit, { transaction_id: tx, finalize: "commit", ...intent(`Save ${title}`) });
+    await session.commit(`Save ${title}`);
   } catch (e) {
-    await canva.call(TOOLS.edit, { transaction_id: tx, finalize: "cancel", ...intent("Discard the failed Scale & Sustain build") }).catch(() => undefined);
+    await session.cancel();
     throw e;
   }
 
   const files = await exportFiles(canva, designId);
-  return { designId, title, editUrl: urls.edit_url || urls.view_url || `https://www.canva.com/design/${designId}/edit`, ...files };
+  return { designId, title, editUrl: urls.edit_url || urls.view_url || `https://www.canva.com/design/${designId}/edit`, ...files, logoPlaced: Boolean(blackId), notes: session.notes };
 }
 
 /** Add the logo later, when a person has posted the file in the Slack thread. */
 export async function addLogoLater({ canva, designId, logo, org }: { canva: CanvaLike; designId: string; logo: LogoVariants; org: string }) {
   if (designId === map.masterDesignId) throw new Error("refusing to edit the master design");
   await canva.ensure?.();
-  const tx = await openTransaction(canva, designId, `Open the ${org} post to add the logo`);
+  const session = await openSession(canva, designId, `Open the ${org} post to add the logo`);
+  if (!canPlaceImages(canva, session)) {
+    await session.cancel();
+    throw new Error("Tendi's Canva connection cannot upload or place images; add the logo in Canva by hand (pages 1 to 8)");
+  }
   const blackId = await uploadPng(canva, logo.black, `${org} logo (black)`);
   const whiteId = await uploadPng(canva, logo.white, `${org} logo (white)`);
   try {
     for (const slot of map.logos as LogoSlot[]) {
-      await edit(canva, tx, slot.page, logoOps(slot, slot.colour === "black" ? blackId : whiteId, logo.aspect, { deleteOld: false }), `Add the ${org} logo on page ${slot.page}`);
+      await session.edit(slot.page, logoOps(slot, slot.colour === "black" ? blackId : whiteId, logo.aspect, { deleteOld: false }), `Add the ${org} logo on page ${slot.page}`);
     }
-    await callJson(canva, TOOLS.edit, { transaction_id: tx, finalize: "commit", ...intent(`Save the ${org} logo`) });
+    await session.commit(`Save the ${org} logo`);
   } catch (e) {
-    await canva.call(TOOLS.edit, { transaction_id: tx, finalize: "cancel", ...intent("Discard") }).catch(() => undefined);
+    await session.cancel();
     throw e;
   }
   return exportFiles(canva, designId);

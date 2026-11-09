@@ -18,6 +18,7 @@ import { textOps, logoOps, assetIdFrom, exportUrl, type LogoSlot } from "../tend
 import { encodeNotes, decodeNotes, weekStartBrussels, isoDate, buildsThisWeek, brusselsDay } from "../tendi/sss/notion-log";
 import { createScaleSustain, loadSssState, saveSssState } from "../tendi/sss/job";
 import { weeklyDue } from "../tendi/sss/service";
+import { buildPost, editingGeneration, toV1Op, collectElementIds } from "../tendi/sss/canva-build";
 import { INTRO_TEXT, postText } from "../tendi/sss/slack-messages";
 import { sssAllowedUsers } from "../tendi/sss/config";
 import { masterTemplateGuard } from "../tendi/canva";
@@ -188,8 +189,15 @@ describe("Scale & Sustain Stories: Notion notes, weeks and schedule", () => {
     expect(weeklyDue(new Date("2027-04-05T06:25:00Z"), undefined)).toBe(false);
     expect(weeklyDue(new Date("2026-11-10T07:30:00Z"), undefined)).toBe(false); // Tuesday
     expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 1, done: true })).toBe(false);
-    expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 2, done: false })).toBe(false);
+    expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 2, done: false, deploy: "same" }, "same")).toBe(false);
+    // a week written by the old code (no deploy marker), like 9 Nov 2026: the new deploy retries it
+    expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 2, done: false }, "new")).toBe(true);
     expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-02", attempts: 2, done: true })).toBe(true);
+    // a new deploy gets fresh attempts for a failed week, never for a done one
+    expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 2, done: false, deploy: "aaa" }, "bbb")).toBe(true);
+    expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 2, done: false, deploy: "aaa" }, "aaa")).toBe(false);
+    expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 1, done: true, deploy: "aaa" }, "bbb")).toBe(false);
+    expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 2, done: false, deploy: "aaa", resets: 3 }, "bbb")).toBe(false);
   });
 
   it("counts builds per week", () => {
@@ -201,6 +209,54 @@ describe("Scale & Sustain Stories: Notion notes, weeks and schedule", () => {
     expect(sssAllowedUsers({ TENDI_WRITE_ALLOWLIST: "U1, U2" } as any)).toEqual(["U1", "U2"]);
     expect(sssAllowedUsers({ SSS_ALLOWED_SLACK_USER_IDS: "U9", TENDI_WRITE_ALLOWLIST: "U1" } as any)).toEqual(["U9"]);
     expect(sssAllowedUsers({} as any)).toEqual([]);
+  });
+});
+
+describe("Scale & Sustain Stories: Canva's older editing tools (Tendi's connection on 9 Nov 2026)", () => {
+  const v1Canva = (opts: { schemaOps?: string[]; hasUpload?: boolean } = {}) => {
+    const calls: { name: string; args: any }[] = [];
+    const tools = new Set(["copy-design", "export-design", "start-editing-transaction", "perform-editing-operations", "commit-editing-transaction", "cancel-editing-transaction", ...(opts.hasUpload ? ["create-upload-url"] : [])]);
+    return {
+      calls,
+      canva: {
+        has: (t: string) => tools.has(t),
+        schema: (t: string) => (t === "perform-editing-operations" && opts.schemaOps ? { properties: { operations: { items: { anyOf: opts.schemaOps.map((o) => ({ properties: { type: { const: o } } })) } } } } : undefined),
+        async call(name: string, args: any) {
+          calls.push({ name, args });
+          if (name === "copy-design") return reply({ design: { id: "DACOPY00001" } });
+          if (name === "start-editing-transaction")
+            return reply({ transaction_id: "tx9", pages: [{ page_id: "PBpWZD1bPbqmRHnr", page_number: 1 }], richtexts: [{ element_id: "PBpWZD1bPbqmRHnr-LB0nxnMtBmyk436g", page_index: 1, regions: [{ text: "x" }] }], fills: [{ element_id: "PBpWZD1bPbqmRHnr-LBqYB4zNRjjd5JMw", page_index: 1 }] });
+          if (name === "perform-editing-operations") return reply({ edit_operation_results: [] });
+          if (name === "commit-editing-transaction") return reply({ ok: true });
+          if (name === "export-design") return reply({ job: { status: "failed" } });
+          throw new Error("unexpected " + name);
+        },
+      },
+    };
+  };
+
+  it("detects the generation and maps operations to element_id", () => {
+    expect(editingGeneration(v1Canva().canva)).toBe("v1");
+    const ids = collectElementIds({ richtexts: [{ element_id: "PBa-LBx" }], fills: [{ element_id: "LBy" }] });
+    const resolve = (el: string) => ids.find((x) => x === el || x.endsWith(`-${el}`)) || el;
+    expect(toV1Op({ type: "replace_text", locator_id: "PBa-LBx", text: "t" }, resolve, () => "PBa", 1)).toEqual({ type: "replace_text", element_id: "PBa-LBx", text: "t" });
+    expect(toV1Op({ type: "delete_element", locator_id: "PBa-LBy" }, resolve, () => "PBa", 1)).toEqual({ type: "delete_element", element_id: "LBy" });
+  });
+
+  it("builds with the older tools; skips what the schema does not offer; no logo upload without the tools", async () => {
+    const { canva, calls } = v1Canva({ schemaOps: ["replace_text", "find_and_replace_text", "delete_element", "update_title"] });
+    const v = validateCopy(ve.deck, veCase);
+    const logo = { original: Buffer.from(""), black: Buffer.from("b"), white: Buffer.from("w"), width: 10, height: 3, aspect: 3.3 };
+    const built = await buildPost({ canva, deck: v.deck, issueNo: 2, org: "X", logo });
+    expect(built.designId).toBe("DACOPY00001");
+    expect(built.logoPlaced).toBe(false);
+    const ops = calls.filter((c) => c.name === "perform-editing-operations").flatMap((c) => c.args.operations);
+    expect(ops.every((o: any) => !("locator_id" in o))).toBe(true);
+    expect(ops.find((o: any) => o.type === "replace_text")?.element_id).toBe("PBpWZD1bPbqmRHnr-LB0nxnMtBmyk436g");
+    expect(ops.some((o: any) => o.type === "insert_fill" || o.type === "format_text" || o.type === "position_element")).toBe(false);
+    expect(ops.filter((o: any) => o.type === "delete_element")).toHaveLength(8); // old logos always removed
+    expect(calls.some((c) => c.name === "commit-editing-transaction")).toBe(true);
+    expect(built.notes.join(" ")).toMatch(/cannot upload or place images/);
   });
 });
 
