@@ -31,7 +31,7 @@ export async function writeCopy({
   model,
   readable,
   raw,
-  maxAttempts = 3,
+  maxAttempts = 5,
 }: {
   anthropic: Pick<Anthropic, "messages">;
   model: string;
@@ -64,7 +64,10 @@ export async function writeCopy({
     last = validateCopy(draft, raw);
     if (!last.problems.length) return last.deck;
     messages.push({ role: "assistant", content: JSON.stringify(draft) });
-    messages.push({ role: "user", content: `Fix these problems and return the full JSON again, changing nothing else:\n- ${last.problems.join("\n- ")}` });
+    const lengthNote = last.problems.some((p) => /characters \(max/.test(p))
+      ? "\nCount every character, spaces included, and aim for at least 3 characters under each limit. For a short header, use fewer words rather than shorter words."
+      : "";
+    messages.push({ role: "user", content: `Fix these problems and return the full JSON again, changing nothing else:\n- ${last.problems.join("\n- ")}${lengthNote}` });
   }
   const err = new CopyError(`the copy still had problems after ${maxAttempts} attempts: ${last?.problems?.join("; ") || "no valid JSON"}`);
   err.deck = last?.deck;

@@ -33,7 +33,7 @@ interface SssState {
   awaitingLogo: Record<string, { org: string; issueNo: number; threadTs: string }>; // designId -> post
   introPosted?: Record<string, string>; // channel -> ISO time
   introTextTs?: Record<string, string>; // channel -> ts of the intro message, so a retry does not repeat it
-  week?: { monday: string; attempts: number; done: boolean };
+  week?: { monday: string; attempts: number; done: boolean; deploy?: string; resets?: number };
 }
 function stateFile(): string {
   const d = path.join(dataDir(), "tendi-sss");
@@ -152,8 +152,8 @@ export function createScaleSustain(deps: SssDeps) {
         notionUrl: page.url,
         caseLink: readable.library_link,
         tags: deck.tags,
-        hasLogo: Boolean(logo),
-        notesForTeam: deck.notes_for_team,
+        hasLogo: built.logoPlaced,
+        notesForTeam: [deck.notes_for_team, ...built.notes.map((n) => `Canva: ${n}.`)].filter(Boolean).join(" "),
         exportNote: built.exportNote,
       }),
       pdf: built.pdf,
@@ -162,7 +162,7 @@ export function createScaleSustain(deps: SssDeps) {
       caption: deck.caption,
     });
     const rootTs = threadTs || posted.ts;
-    if (!logo) {
+    if (!built.logoPlaced) {
       const st = loadSssState();
       st.awaitingLogo[built.designId] = { org, issueNo, threadTs: rootTs };
       saveSssState(st);

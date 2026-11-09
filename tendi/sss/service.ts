@@ -15,12 +15,24 @@ import { loadSssState, saveSssState, type ScaleSustain } from "./job.js";
 import { isoDate, weekStartBrussels } from "./notion-log.js";
 
 /** True when the weekly build is due: Monday, between 08:30 and 20:00 Brussels, not done this week, fewer than 2 attempts. */
-export function weeklyDue(now: Date, week: { monday: string; attempts: number; done: boolean } | undefined): boolean {
+/** The deployed commit (Render sets RENDER_GIT_COMMIT). A new deploy gets fresh attempts for a week whose runs failed. */
+const BOOT_ID = `boot-${Date.now()}`;
+export function deployId(env = process.env): string {
+  return env.RENDER_GIT_COMMIT || BOOT_ID;
+}
+/** At most this many fresh starts per week after failed runs, so a crash loop cannot keep retrying. */
+export const MAX_RESETS_PER_WEEK = 3;
+
+export function weeklyDue(now: Date, week: { monday: string; attempts: number; done: boolean; deploy?: string; resets?: number } | undefined, deploy = deployId()): boolean {
   const c = localClock(now, SSS.timeZone);
   if (c.weekday !== SSS.weekday) return false;
   if (c.hhmm < SSS.time || c.hhmm >= SSS.latest) return false;
   const monday = isoDate(weekStartBrussels(now));
-  if (week && week.monday === monday && (week.done || week.attempts >= 2)) return false;
+  if (week && week.monday === monday) {
+    if (week.done) return false;
+    const fresh = !!deploy && week.deploy !== deploy && (week.resets || 0) < MAX_RESETS_PER_WEEK;
+    if (week.attempts >= 2 && !fresh) return false;
+  }
   return true;
 }
 
@@ -60,14 +72,17 @@ export function startSssService(deps: SssServiceDeps) {
     const st = loadSssState();
     if (!weeklyDue(now, st.week)) return;
     const monday = isoDate(weekStartBrussels(now));
-    const attempts = st.week?.monday === monday ? st.week.attempts : 0;
-    st.week = { monday, attempts: attempts + 1, done: false };
+    const thisWeek = st.week?.monday === monday ? st.week : undefined;
+    const reset = !!thisWeek && thisWeek.attempts >= 2 && thisWeek.deploy !== deployId();
+    const attempts = thisWeek && !reset ? thisWeek.attempts : 0;
+    const resets = (thisWeek?.resets || 0) + (reset ? 1 : 0);
+    st.week = { monday, attempts: attempts + 1, done: false, deploy: deployId(), resets };
     saveSssState(st);
     log(`weekly run, attempt ${attempts + 1} of 2 this week`);
     void run("schedule", () => sss.runWeekly(now)).then((r) => {
       if (r) {
         const s2 = loadSssState();
-        s2.week = { monday, attempts: attempts + 1, done: true };
+        s2.week = { monday, attempts: attempts + 1, done: true, deploy: deployId(), resets };
         saveSssState(s2);
       }
     });

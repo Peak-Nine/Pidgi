@@ -36,7 +36,7 @@ export function validateCopy(raw: any, caseData: LibraryCase): { deck: Deck; pro
 
   const check = (label: string, value: string, limit: number) => {
     if (!value || !String(value).trim()) problems.push(`${label} is empty`);
-    else if ([...String(value)].length > limit) problems.push(`${label} is ${[...String(value)].length} characters (max ${limit})`);
+    else if ([...String(value)].length > limit) problems.push(`${label} is ${[...String(value)].length} characters (max ${limit}): "${value}"`);
     if (DASHES.test(value || "")) problems.push(`${label} contains a long dash`);
   };
 
