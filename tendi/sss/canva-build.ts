@@ -144,6 +144,35 @@ export function v1PageIds(j: any): Record<string, string> {
   return out;
 }
 
+/** Text per element in a v1 answer: element_id -> the texts of its regions (runs). */
+export function v1Texts(j: any): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const rt of Array.isArray(j?.richtexts) ? j.richtexts : []) {
+    const id = String(rt?.element_id || rt?.locator_id || "");
+    if (!id) continue;
+    out[id] = (Array.isArray(rt?.regions) ? rt.regions : []).map((r: any) => String(r?.text ?? r?.characters ?? ""));
+  }
+  return out;
+}
+
+/**
+ * On the older tools, replace_text resets a box to a default style (seen on 9 Nov 2026: the
+ * takeaway lessons came out at 16 px in another font instead of 96 px). find_and_replace_text
+ * on the box's current text keeps its style, so replace_text becomes that whenever the
+ * current text is known: the first run with text gets the new text, any other runs are emptied.
+ */
+export function styleSafeReplace(op: any, current: string[] | undefined): any[] {
+  if (op?.type !== "replace_text" || !current || !current.some((t) => t.trim())) return [op];
+  const strip = (t: string) => t.replace(/\n+$/, "");
+  const runs = current.map(strip).filter((t) => t.trim());
+  const [first, ...rest] = runs;
+  const { text, ...base } = op;
+  return [
+    { ...base, type: "find_and_replace_text", find_text: first, replace_text: String(text ?? "") },
+    ...rest.map((r) => ({ ...base, type: "find_and_replace_text", find_text: r, replace_text: "" })),
+  ];
+}
+
 /** Turn a v2 operation (locator_id = <pageId>-<elementId>) into a v1 one (element_id as Canva listed it). */
 export function toV1Op(op: any, resolve: (elementId: string) => string, pageIdOf: (page: number | string) => string, page: number): any {
   const { locator_id, ...rest } = op || {};
@@ -183,6 +212,7 @@ async function openSession(canva: CanvaLike, designId: string, what: string): Pr
     if (!tx) throw new Error(`Canva did not open an editing session on ${designId}. Its answer began: ${JSON.stringify(j).slice(0, 300)}`);
     const ids = collectElementIds(j);
     const pageIds = v1PageIds(j);
+    const texts = v1Texts(j);
     const notes: string[] = [];
     const resolve = (el: string) => ids.find((x) => x === el) || ids.find((x) => x.endsWith(`-${el}`) || x.endsWith(el)) || el;
     const pageIdOf = (n: number | string) => pageIds[String(n)] || pages[String(n)];
@@ -197,7 +227,15 @@ async function openSession(canva: CanvaLike, designId: string, what: string): Pr
         const dropped = operations.filter((o) => !supports(o.type)).map((o) => o.type);
         if (dropped.length) notes.push(`page ${page}: Canva's older tools do not offer ${[...new Set(dropped)].join(", ")}`);
         if (!keep.length) return {};
-        const res = await callJson(canva, "perform-editing-operations", { transaction_id: tx, page_index: page, operations: keep.map((o) => toV1Op(o, resolve, pageIdOf, page)), ...intent(w) });
+        const v1ops = keep
+          .map((o) => toV1Op(o, resolve, pageIdOf, page))
+          .flatMap((o) => {
+            if (o.type !== "replace_text" || !supports("find_and_replace_text")) return [o];
+            const out = styleSafeReplace(o, texts[o.element_id]);
+            if (out[0]?.type === "find_and_replace_text") texts[o.element_id] = [String(o.text ?? "")];
+            return out;
+          });
+        const res = await callJson(canva, "perform-editing-operations", { transaction_id: tx, page_index: page, operations: v1ops, ...intent(w) });
         checkResults(res, page);
         return res;
       },
