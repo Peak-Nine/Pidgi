@@ -45,6 +45,13 @@ export const SSS = {
     cta: "Explore the Beyond the Grant Case Library: https://library.peaknine.studio",
   },
 
+  // Fixed end of every LinkedIn caption (agreed with Niels on 9 Nov 2026). The code adds it after
+  // the part Claude writes (hook to closing question), so it is the same every week.
+  captionOutro:
+    "About this series: at Peak Nine │ Impact Innovation Studio, we help development interventions grow into financial sustainability and local ownership. Scale & Sustain Stories is where we share what we learn on the way. Each week, one real programme from our Beyond the Grant Library: what worked, and what is still open.",
+  captionLinkLine: (org: string) => `Read the full ${org} case:`,
+  captionBodyLimit: 850,
+
   // Fixed line for page 9 (the call to action)
   ctaParagraph: "Our Proof of Change programme helps development interventions build a path to financial sustainability and local ownership.",
 };

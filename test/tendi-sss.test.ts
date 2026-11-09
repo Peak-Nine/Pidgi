@@ -13,7 +13,7 @@ process.env.TENDI_DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "sss-test-"));
 
 import { isEligible, relativeYear, readableCase, parseLibraryHtml, guessOrgWebsite, type LibraryCase } from "../tendi/sss/library";
 import { pickCase } from "../tendi/sss/pick-case";
-import { validateCopy } from "../tendi/sss/validate-copy";
+import { validateCopy, captionProblems } from "../tendi/sss/validate-copy";
 import { textOps, logoOps, assetIdFrom, exportUrl, type LogoSlot } from "../tendi/sss/canva-build";
 import { encodeNotes, decodeNotes, weekStartBrussels, isoDate, buildsThisWeek, brusselsDay } from "../tendi/sss/notion-log";
 import { createScaleSustain, loadSssState, saveSssState } from "../tendi/sss/job";
@@ -133,6 +133,33 @@ describe("Scale & Sustain Stories: copy checks and Canva operations", () => {
     const v = validateCopy(ve.deck, veCase);
     expect(v.problems).toEqual([]);
     expect(v.deck.timeline.map((t) => t.pill)).toEqual(["year 1", "years 2-4", "year 5", "year 6"]);
+  });
+
+  it("caption: the code adds the fixed ending with the link to this exact case", () => {
+    const v = validateCopy(ve.deck, veCase);
+    expect(v.deck.caption.startsWith("What if proving your impact unlocked $4.28 million?")).toBe(true);
+    expect(v.deck.caption).toContain("About this series: at Peak Nine │ Impact Innovation Studio");
+    expect(v.deck.caption).toContain("Read the full Village Enterprise case:\nhttps://library.peaknine.studio/#view=cases&case=WEB-2026-001");
+    expect(v.deck.caption.endsWith("#BeyondTheGrant #ImpactBonds #PovertyAlleviation #ResultsBasedFinancing")).toBe(true);
+    expect([...v.deck.caption].length).toBeLessThanOrEqual(1300);
+  });
+
+  it("caption: the agreed structure is enforced", () => {
+    const old = "What does it take to get paid only for results?\n\nVillage Enterprise ran a bond.\n\nThe lesson? Agree up front.";
+    const p = captionProblems(old);
+    expect(p.some((x) => x.includes('"What if"'))).toBe(true);
+    expect(p.some((x) => x.includes("👇"))).toBe(true);
+    expect(p.some((x) => x.includes("Here is what actually worked:"))).toBe(true);
+    expect(p.some((x) => x.includes("closing question"))).toBe(true);
+    const twoBullets = (ve.deck.caption as string).replace(/\n• Let an outsider check[^\n]*/, "");
+    expect(captionProblems(twoBullets).some((x) => x.includes("exactly 3 bullets"))).toBe(true);
+    expect(captionProblems(ve.deck.caption + "\n\n#Extra").some((x) => x.includes("hashtags"))).toBe(true);
+  });
+
+  it("cover: subheadline may not start with How", () => {
+    const d = JSON.parse(JSON.stringify(ve.deck));
+    d.cover.subheadline = "How Village Enterprise ran a bond in Kenya and Uganda.";
+    expect(validateCopy(d, veCase).problems.some((p) => p.includes("cover.subheadline"))).toBe(true);
   });
 
   it("broken copy is caught", () => {
