@@ -65,7 +65,7 @@ export async function writeCopy({
     if (!last.problems.length) return last.deck;
     messages.push({ role: "assistant", content: JSON.stringify(draft) });
     const lengthNote = last.problems.some((p) => /characters \(max/.test(p))
-      ? "\nCount every character, spaces included, and aim for at least 3 characters under each limit. For a short header, use fewer words rather than shorter words."
+      ? "\nCount every character, spaces included, and aim for at least 10 characters under each limit (the number after \"max\"). Cut a whole clause rather than trimming letters. For a short header, use fewer words rather than shorter words."
       : "";
     messages.push({ role: "user", content: `Fix these problems and return the full JSON again, changing nothing else:\n- ${last.problems.join("\n- ")}${lengthNote}` });
   }

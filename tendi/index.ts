@@ -941,6 +941,7 @@ async function main(): Promise<void> {
       ensure: async () => {
         if (!bridge.connected()) await bridge.connect();
       },
+      refresh: () => bridge.refreshTools(),
       schema: (tool) => bridge.tools.find((t) => t.name === nameOf(tool))?.input_schema,
       call: async (tool, args) => {
         const t = nameOf(tool);

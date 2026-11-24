@@ -358,6 +358,32 @@ export class CanvaBridge {
     return this.rawNames.has(name);
   }
 
+  /**
+   * Ask Canva again which tools it offers. Canva changes the tool set on its side without
+   * telling clients (23 Nov 2026: start-editing-transaction disappeared while Tendi was
+   * running), so long-running jobs call this before they start instead of trusting the
+   * list from start-up.
+   */
+  async refreshTools(): Promise<void> {
+    if (!this.client) {
+      await this.connect();
+      return;
+    }
+    try {
+      const listed = await this.client.listTools();
+      this.rawNames.clear();
+      this.tools = listed.tools.map((t) => {
+        const name = toolName(t.name);
+        this.rawNames.set(name, t.name);
+        return { name, description: t.description ?? "", input_schema: cleanSchema(t.inputSchema) };
+      });
+    } catch {
+      // A dropped session: reconnect, which lists the tools again.
+      await this.disconnect();
+      await this.connect();
+    }
+  }
+
   async call(name: string, input: any): Promise<{ text: string; isError: boolean; images?: { data: string; mimeType: string }[] }> {
     const raw = this.rawNames.get(name);
     if (!raw) return { isError: true, text: `Unknown Canva tool ${name}.` };

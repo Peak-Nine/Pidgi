@@ -162,6 +162,17 @@ describe("Scale & Sustain Stories: copy checks and Canva operations", () => {
     expect(validateCopy(d, veCase).problems.some((p) => p.includes("cover.subheadline"))).toBe(true);
   });
 
+  it("paragraphs may run a few characters over; headlines may not", () => {
+    const d = JSON.parse(JSON.stringify(ve.deck));
+    d.how.paragraph = "x".repeat(191);
+    expect(validateCopy(d, veCase).problems.some((p) => p.startsWith("how.paragraph"))).toBe(false);
+    d.how.paragraph = "x".repeat(197);
+    expect(validateCopy(d, veCase).problems.some((p) => p.startsWith("how.paragraph"))).toBe(true);
+    d.how.paragraph = ve.deck.how.paragraph;
+    d.cover.headline = "x".repeat(65);
+    expect(validateCopy(d, veCase).problems.some((p) => p.startsWith("cover.headline"))).toBe(true);
+  });
+
   it("broken copy is caught", () => {
     const bad = JSON.parse(JSON.stringify(ve.deck));
     bad.cover.headline = "A very long headline that goes on and on beyond the fifty-five character limit";
@@ -214,7 +225,12 @@ describe("Scale & Sustain Stories: Notion notes, weeks and schedule", () => {
     expect(weeklyDue(new Date("2026-11-09T07:25:00Z"), undefined)).toBe(false); // 08:25
     expect(weeklyDue(new Date("2027-04-05T06:30:00Z"), undefined)).toBe(true); // 08:30 CEST
     expect(weeklyDue(new Date("2027-04-05T06:25:00Z"), undefined)).toBe(false);
-    expect(weeklyDue(new Date("2026-11-10T07:30:00Z"), undefined)).toBe(false); // Tuesday
+    // Tuesday: catch up only when Monday was missed or a new deploy follows failed attempts
+    expect(weeklyDue(new Date("2026-11-10T07:30:00Z"), undefined)).toBe(true);
+    expect(weeklyDue(new Date("2026-11-24T09:00:00Z"), { monday: "2026-11-23", attempts: 2, done: false, deploy: "old" }, "new")).toBe(true);
+    expect(weeklyDue(new Date("2026-11-24T09:00:00Z"), { monday: "2026-11-23", attempts: 2, done: false, deploy: "same" }, "same")).toBe(false);
+    expect(weeklyDue(new Date("2026-11-24T09:00:00Z"), { monday: "2026-11-23", attempts: 1, done: true, deploy: "old" }, "new")).toBe(false);
+    expect(weeklyDue(new Date("2026-11-28T09:00:00Z"), undefined)).toBe(false); // Saturday
     expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 1, done: true })).toBe(false);
     expect(weeklyDue(new Date("2026-11-09T09:00:00Z"), { monday: "2026-11-09", attempts: 2, done: false, deploy: "same" }, "same")).toBe(false);
     // a week written by the old code (no deploy marker), like 9 Nov 2026: the new deploy retries it
@@ -261,6 +277,34 @@ describe("Scale & Sustain Stories: Canva's older editing tools (Tendi's connecti
       },
     };
   };
+
+  it("a tool that vanished on Canva's side: re-list and continue with the newer tools (23 Nov 2026)", async () => {
+    let tools = new Set(["copy-design", "export-design", "start-editing-transaction", "perform-editing-operations", "commit-editing-transaction"]);
+    const calls: string[] = [];
+    let refreshed = 0;
+    const canva = {
+      has: (t: string) => tools.has(t),
+      refresh: async () => {
+        refreshed++;
+        if (refreshed >= 2) tools = new Set(["copy-design", "export-design", "read-design", "edit-design"]);
+      },
+      async call(name: string, _args: any) {
+        calls.push(name);
+        if (name === "copy-design") return reply({ design: { id: "DACOPY00002", urls: { edit_url: "https://x" } } });
+        if (name === "start-editing-transaction") return { isError: true, text: "MCP error -32602: Tool start-editing-transaction not found" };
+        if (name === "read-design") return reply({ transaction: { transaction_id: "tx2" } });
+        if (name === "edit-design") return reply({ edit_operation_results: [] });
+        if (name === "export-design") return reply({ job: { status: "failed" } });
+        throw new Error("unexpected " + name);
+      },
+    };
+    const v = validateCopy(ve.deck, veCase);
+    const built = await buildPost({ canva, deck: v.deck, issueNo: 3, org: "X", logo: null });
+    expect(built.designId).toBe("DACOPY00002");
+    expect(calls).toContain("start-editing-transaction");
+    expect(calls).toContain("edit-design");
+    expect(calls.filter((c) => c === "edit-design").length).toBeGreaterThan(3);
+  });
 
   it("detects the generation and maps operations to element_id", () => {
     expect(editingGeneration(v1Canva().canva)).toBe("v1");

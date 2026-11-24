@@ -22,6 +22,9 @@ export interface Deck {
   notes_for_team: string;
 }
 
+/** Extra characters a paragraph box may take beyond its nominal limit. */
+export const PARAGRAPH_SLACK = 6;
+
 const YEAR = /\b(19|20)\d{2}\b/;
 const DASHES = /[\u2014\u2013]/; // em dash, en dash
 
@@ -40,8 +43,12 @@ export function validateCopy(raw: any, caseData: LibraryCase): { deck: Deck; pro
   const L: any = map.text;
 
   const check = (label: string, value: string, limit: number) => {
+    // Paragraph boxes (limit 140 and up) grow downwards in Canva and have room for a few
+    // characters more; on 23 Nov 2026 a build failed five times on 191 of 190. Headlines,
+    // headers and pills keep their hard limit, because they are sized to their lines.
+    const allowed = limit >= 140 && limit < 1000 ? limit + PARAGRAPH_SLACK : limit;
     if (!value || !String(value).trim()) problems.push(`${label} is empty`);
-    else if ([...String(value)].length > limit) problems.push(`${label} is ${[...String(value)].length} characters (max ${limit}): "${value}"`);
+    else if ([...String(value)].length > allowed) problems.push(`${label} is ${[...String(value)].length} characters (max ${limit}): "${value}"`);
     if (DASHES.test(value || "")) problems.push(`${label} contains a long dash`);
   };
 

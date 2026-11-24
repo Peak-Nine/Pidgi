@@ -25,15 +25,17 @@ export const MAX_RESETS_PER_WEEK = 3;
 
 export function weeklyDue(now: Date, week: { monday: string; attempts: number; done: boolean; deploy?: string; resets?: number } | undefined, deploy = deployId()): boolean {
   const c = localClock(now, SSS.timeZone);
-  if (c.weekday !== SSS.weekday) return false;
   if (c.hhmm < SSS.time || c.hhmm >= SSS.latest) return false;
   const monday = isoDate(weekStartBrussels(now));
-  if (week && week.monday === monday) {
-    if (week.done) return false;
-    const fresh = !!deploy && week.deploy !== deploy && (week.resets || 0) < MAX_RESETS_PER_WEEK;
-    if (week.attempts >= 2 && !fresh) return false;
-  }
-  return true;
+  const thisWeek = week && week.monday === monday ? week : undefined;
+  if (thisWeek?.done) return false;
+  const fresh = !!thisWeek && !!deploy && thisWeek.deploy !== deploy && (thisWeek.resets || 0) < MAX_RESETS_PER_WEEK;
+  if (c.weekday === SSS.weekday) return !thisWeek || thisWeek.attempts < 2 || fresh;
+  // Tuesday to Friday: catch up when Monday was missed (no attempt this week, for example
+  // the service was down) or when a new deploy arrives after Monday's attempts failed.
+  // runWeekly itself skips a week that already has a live post.
+  if (c.weekday >= 2 && c.weekday <= 5) return !thisWeek || fresh;
+  return false;
 }
 
 export interface SssServiceDeps {
