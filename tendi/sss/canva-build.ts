@@ -25,6 +25,18 @@ export interface CanvaLike {
   schema?: (rawTool: string) => any;
   /** Connect if the connection dropped (CanvaBridge only lists tools once connected). */
   ensure?: () => Promise<void>;
+  /** Re-list the tools Canva offers now (its tool set changes without notice). */
+  refresh?: () => Promise<void>;
+}
+
+/** Connect, and make sure the tool list is today's, before a build or an export. */
+async function prepare(canva: CanvaLike): Promise<void> {
+  await canva.ensure?.();
+  try {
+    await canva.refresh?.();
+  } catch {
+    /* keep the list we have; the call that needs a tool will say what is missing */
+  }
 }
 
 export const TOOLS = {
@@ -198,6 +210,19 @@ export function toV1Op(op: any, resolve: (elementId: string) => string, pageIdOf
 }
 
 async function openSession(canva: CanvaLike, designId: string, what: string): Promise<EditSession> {
+  try {
+    return await openSessionOnce(canva, designId, what);
+  } catch (e: any) {
+    // The tool vanished on Canva's side since the list was read: re-list once and pick again.
+    if (canva.refresh && /not found|unknown canva tool|not available/i.test(String(e?.message || e))) {
+      await canva.refresh();
+      return openSessionOnce(canva, designId, what);
+    }
+    throw e;
+  }
+}
+
+async function openSessionOnce(canva: CanvaLike, designId: string, what: string): Promise<EditSession> {
   const gen = editingGeneration(canva);
   if (gen === "v2") {
     const read = await callJson(canva, TOOLS.read, { design_id: designId, open_transaction: true, filter: { fields: ["page_metadata"], page_indices: [1] }, ...intent(what) });
@@ -408,7 +433,7 @@ function canPlaceImages(canva: CanvaLike, session: EditSession): boolean {
  * The new copy is filed in the shared Peak Nine folder by CanvaBridge itself (TENDI_CANVA_FOLDER_ID).
  */
 export async function buildPost({ canva, deck, issueNo, org, logo }: { canva: CanvaLike; deck: Deck; issueNo: number; org: string; logo: LogoVariants | null }): Promise<BuiltPost> {
-  await canva.ensure?.();
+  await prepare(canva);
   const missing = missingTools(canva);
   if (missing.length) throw new Error(`Tendi's Canva connection lacks ${missing.join(", ")}; check canva_status`);
   const title = SSS.designTitle(issueNo, org);
@@ -465,7 +490,7 @@ export async function buildPost({ canva, deck, issueNo, org, logo }: { canva: Ca
 /** Add the logo later, when a person has posted the file in the Slack thread. */
 export async function addLogoLater({ canva, designId, logo, org }: { canva: CanvaLike; designId: string; logo: LogoVariants; org: string }) {
   if (designId === map.masterDesignId) throw new Error("refusing to edit the master design");
-  await canva.ensure?.();
+  await prepare(canva);
   const session = await openSession(canva, designId, `Open the ${org} post to add the logo`);
   if (!canPlaceImages(canva, session)) {
     await session.cancel();
@@ -509,7 +534,7 @@ async function exportOne(canva: CanvaLike, designId: string, type: "pdf" | "png"
 
 /** Pages 1 to 10 as one PDF (the LinkedIn document, without the caption page 11) and page 1 as PNG (the Slack preview). */
 export async function exportFiles(canva: CanvaLike, designId: string): Promise<{ pdf: Buffer | null; cover: Buffer | null; exportNote?: string }> {
-  await canva.ensure?.();
+  await prepare(canva);
   const notes: string[] = [];
   let pdf: Buffer | null = null;
   let cover: Buffer | null = null;
