@@ -301,6 +301,8 @@ describe("Scale & Sustain Stories: Canva's older editing tools (Tendi's connecti
     const v = validateCopy(ve.deck, veCase);
     const built = await buildPost({ canva, deck: v.deck, issueNo: 3, org: "X", logo: null });
     expect(built.designId).toBe("DACOPY00002");
+    // The team link, never Canva's temporary canva.com/d/ link that only opens for Niels.
+    expect(built.editUrl).toBe("https://www.canva.com/design/DACOPY00002/edit");
     expect(calls).toContain("start-editing-transaction");
     expect(calls).toContain("edit-design");
     expect(calls.filter((c) => c === "edit-design").length).toBeGreaterThan(3);

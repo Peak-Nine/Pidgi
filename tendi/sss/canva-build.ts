@@ -400,14 +400,14 @@ function findElement(res: any, id: string): any {
   return null;
 }
 
-async function designUrls(canva: CanvaLike, designId: string): Promise<{ edit_url?: string; view_url?: string }> {
-  if (!canva.has(TOOLS.read)) return {};
-  try {
-    const j = await callJson(canva, TOOLS.read, { design_id: designId, filter: { fields: ["design_metadata"] }, ...intent("Get the links of the new Scale & Sustain Stories design") });
-    return j?.design_metadata?.urls || j?.urls || {};
-  } catch {
-    return {};
-  }
+/**
+ * The link Tendi shares. Canva's edit_url/view_url (canva.com/d/...) are temporary links
+ * that only open for the account that asked for them (Niels's, Tendi's login): Jonas got a
+ * 403 on them on 24 Nov 2026. The plain design address opens for everyone who has access,
+ * which the whole team has through the shared Tendi folder (TENDI_CANVA_FOLDER_ID).
+ */
+export function teamDesignUrl(designId: string): string {
+  return `https://www.canva.com/design/${designId}/edit`;
 }
 
 export interface BuiltPost {
@@ -441,7 +441,6 @@ export async function buildPost({ canva, deck, issueNo, org, logo }: { canva: Ca
   const designId: string | undefined =
     copy?.design?.id || copy?.design_id || copy?.id || (JSON.stringify(copy).match(/\b(D(?!AHZT4MaY2s)[A-Za-z0-9_-]{10})\b/) || [])[1];
   if (!designId || designId === map.masterDesignId) throw new Error(`could not read the new design id from Canva's copy answer: ${JSON.stringify(copy).slice(0, 300)}`);
-  const urls = copy?.design?.urls?.edit_url ? copy.design.urls : await designUrls(canva, designId);
 
   const session = await openSession(canva, designId, `Open ${title} for filling`);
 
@@ -484,7 +483,7 @@ export async function buildPost({ canva, deck, issueNo, org, logo }: { canva: Ca
   }
 
   const files = await exportFiles(canva, designId);
-  return { designId, title, editUrl: urls.edit_url || urls.view_url || `https://www.canva.com/design/${designId}/edit`, ...files, logoPlaced: Boolean(blackId), notes: session.notes };
+  return { designId, title, editUrl: teamDesignUrl(designId), ...files, logoPlaced: Boolean(blackId), notes: session.notes };
 }
 
 /** Add the logo later, when a person has posted the file in the Slack thread. */

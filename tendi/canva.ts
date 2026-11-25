@@ -439,7 +439,7 @@ export class CanvaBridge {
         if (r?.isError) notes.push(`could not file ${id} in the shared folder (${splitContent(r).text.slice(0, 200)})`);
         else {
           this.filed.add(id);
-          notes.push(`${id} filed in the shared Peak Nine Canva folder, so Jonas and the team can open and edit it`);
+          notes.push(`${id} filed in the shared Peak Nine Canva folder, so Jonas and the team can open and edit it. Share it as https://www.canva.com/design/${id}/edit and never as a canva.com/d/ link: those are temporary and only open for Niels's account`);
         }
       } catch (e: any) {
         notes.push(`could not file ${id} in the shared folder (${String(e?.message || e).slice(0, 200)})`);
